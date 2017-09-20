@@ -37,8 +37,8 @@ class Container(object):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self._pno.stop()
-        self._thread.join()
+        self._thread.stop()
+        self._thread.join(1)
 
     def connect(self, conn_url):
         print("Connecting to '{}'".format(conn_url))
