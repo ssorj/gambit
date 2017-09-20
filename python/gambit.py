@@ -113,7 +113,7 @@ class _Command(object):
     def _open(self):
         print("Opening {}".format(self))
 
-        self._do_open()
+        return self._do_open()
 
     def _do_open(self):
         raise NotImplementedError()
@@ -145,7 +145,7 @@ class _ConnectCommand(_Command):
         self._connection_url = connection_url
 
     def _do_open(self):
-        return self._container._pno.connect(self._connection_url)
+        return self._container._pno.connect(self._connection_url, allowed_mechs=b"ANONYMOUS")
 
     def _do_close(self, pno):
         return Connection.wrap(self._container, pno)
@@ -160,7 +160,7 @@ class _OpenSenderCommand(_Command):
     def _do_open(self):
         return self._container._pno.create_sender(self._connection._pno, self._address)
 
-    def _do_close(self):
+    def _do_close(self, pno):
         return Sender.wrap(self._container, pno)
 
 class _SendCommand(_Command):
@@ -263,6 +263,7 @@ def send():
     with Container() as container:
         connection = container.connect("127.0.0.1").get()
         sender = connection.open_sender("examples").get()
+
         results = []
 
         for message in messages:
