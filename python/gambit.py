@@ -46,7 +46,7 @@ class Container(object):
         command = _ConnectCommand(self, conn_url)
         command._enqueue()
 
-        return command
+        return command.get() # XXX
 
 class _IoThread(_threading.Thread):
     def __init__(self, container):
@@ -76,12 +76,17 @@ class _Handler(_handlers.MessagingHandler):
     def __init__(self, container):
         self.container = container
         self.completions = {}
+        self.receive_commands = _collections.deque()
+        self.received_messages = _collections.defaultdict(_collections.deque)
 
     def on_command(self, event):
         command = self.container._thread.commands.pop()
 
         print("Executing {}".format(command))
 
+        #if isinstance(command, _ReceiveCommand):
+        #    # XXX
+        
         key = command._open()
         self.completions[key] = command
 
@@ -91,9 +96,15 @@ class _Handler(_handlers.MessagingHandler):
     def on_link_remote_open(self, event):
         if event.link.is_sender:
             self.completions[event.sender]._close(event.sender)
+        elif event.link.is_receiver:
+            self.completions[event.receiver]._close(event.receiver)
 
     def on_delivery(self, event):
-        self.completions[event.delivery]._close(event.delivery)
+        if event.link.is_sender:
+            self.completions[event.delivery]._close(event.delivery)
+
+    def on_message(self, event):
+        self.received_messages[event.receiver].appendleft(event.message)
 
 class _Command(object):
     def __init__(self, container):
@@ -163,6 +174,19 @@ class _OpenSenderCommand(_Command):
     def _do_close(self, pno):
         return Sender.wrap(self._container, pno)
 
+class _OpenReceiverCommand(_Command):
+    def __init__(self, container, connection, address):
+        super(_OpenReceiverCommand, self).__init__(container)
+
+        self._connection = connection
+        self._address = address
+
+    def _do_open(self):
+        return self._container._pno.create_receiver(self._connection._pno, self._address)
+
+    def _do_close(self, pno):
+        return Receiver.wrap(self._container, pno)
+
 class _SendCommand(_Command):
     def __init__(self, container, sender, message):
         super(_SendCommand, self).__init__(container)
@@ -175,6 +199,18 @@ class _SendCommand(_Command):
 
     def _do_close(self, pno):
         return Delivery.wrap(self._container, pno)
+
+class _ReceiveCommand(_Command):
+    def __init__(self, container, receiver):
+        super(_ReceiveCommand, self).__init__(container)
+
+        self._receiver = receiver
+
+    def _do_open(self):
+        return self._receiver
+
+    def _do_close(self, pno):
+        return Message.wrap(self._container, pno)
 
 class _Wrapper(object):
     def __init__(self, container, pno):
@@ -206,7 +242,7 @@ class Connection(Endpoint):
         command = _OpenSenderCommand(self._container, self, address)
         command._enqueue()
 
-        return command
+        return command.get() # XXX
 
 class Sender(Endpoint):
     def __init__(self, container, pno):
@@ -221,6 +257,28 @@ class Sender(Endpoint):
         command._enqueue()
 
         return command
+
+class Receiver(Endpoint):
+    def __init__(self, container, pno):
+        super(Receiver, self).__init__(container, pno)
+
+        self.sequence_id = 0
+
+    @classmethod
+    def wrap(cls, container, pno):
+        return Receiver(container, pno)
+
+    def receive(self, count=1):
+        commands = []
+
+        for i in range(count):
+            self.sequence_id += 1
+
+            command = _ReceiveCommand(self._container, self, self.sequence_id)
+            command._enqueue()
+            commands.append(command)
+
+        return commands
 
 class Delivery(_Wrapper):
     def __init__(self, container, pno):
@@ -260,17 +318,25 @@ class Message(object):
 def send():
     messages = [Message("message-{}".format(x)) for x in range(10)]
 
-    with Container() as container:
-        connection = container.connect("127.0.0.1").get()
-        sender = connection.open_sender("examples").get()
+    with Container() as cont:
+        conn = cont.connect("127.0.0.1")
+        sender = conn.open_sender("examples")
 
-        results = []
+        trackers = []
 
         for message in messages:
-            results.append(sender.send(message))
+            trackers.append(sender.send(message))
 
-        for result in results:
-            print(result.get().state)
+        for tracker in trackers: # as_completed
+            print(tracker.get().state)
+
+def receive():
+    with Container() as cont:
+        conn = cont.connect("127.0.0.1")
+        receiver = connection.open_receiver("examples")
+
+        for delivery in receiver.deliveries():
+            print(delivery.message.body)
 
 def main():
     send()
