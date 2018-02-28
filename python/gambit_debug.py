@@ -29,7 +29,7 @@ def send_one():
         sender = conn.open_sender("examples")
         tracker = sender.send(message)
 
-        print("RESULT: {} -> {}".format(tracker, tracker.result()))
+        print("RESULT: {}".format(tracker.wait().state))
 
 def receive_one():
     with Container() as cont:
@@ -37,37 +37,36 @@ def receive_one():
         receiver = conn.open_receiver("examples")
         delivery = receiver.receive()
 
-        print("RESULT: {} -> {}".format(delivery, delivery.result()))
+        print("RESULT: {}".format(delivery.wait().message))
 
 def send_three():
     messages = [Message("hello-{}".format(x)) for x in range(3)]
+    trackers = list()
 
     with Container() as cont:
         conn = cont.connect("127.0.0.1")
         sender = conn.open_sender("examples")
-
-        trackers = list()
 
         for message in messages:
             tracker = sender.send(message)
             trackers.append(tracker)
 
         for tracker in trackers:
-            print("RESULT: {} -> {}".format(tracker, tracker.result()))
+            print("RESULT: {}".format(tracker.wait().state))
 
 def receive_three():
+    deliveries = list()
+
     with Container() as cont:
         conn = cont.connect("127.0.0.1")
         receiver = conn.open_receiver("examples")
-
-        deliveries = list()
 
         for i in range(3):
             delivery = receiver.receive()
             deliveries.append(delivery)
 
         for delivery in deliveries:
-            print("RESULT: {} -> {}".format(delivery, delivery.result()))
+            print("RESULT: {}".format(delivery.wait().message))
 
 def main():
     send_one()
@@ -81,18 +80,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-
-# messages = [Message("message-{}".format(x)) for x in range(10)]
-
-    # trackers = []
-
-    # for message in messages:
-    #     trackers.append(sender.send(message))
-
-    # for tracker in trackers:
-    #     print(tracker.result().state)
-
-# --
-
-    # for delivery in receiver.deliveries():
-    #     print(delivery.message.body)

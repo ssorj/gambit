@@ -50,273 +50,63 @@ class Container(object):
     def connect(self, conn_url):
         self._notice("Connecting to {}", conn_url)
 
-        command = _ConnectCommand(self, conn_url)
-        command._enqueue()
+        op = _ConnectOperation(self, conn_url)
+        op.enqueue()
 
-        return command
-
-class _IoThread(_threading.Thread):
-    def __init__(self, container):
-        _threading.Thread.__init__(self)
-
-        self.container = container
-
-        self.commands = _collections.deque()
-        self.events = _reactor.EventInjector()
-        self.container._proton_object.selectable(self.events)
-
-        self.name = "io"
-        self.daemon = True
-
-    def _notice(self, message, *args):
-        message = message.format(*args)
-        print("[io ] {}".format(message))
-
-    def run(self):
-        try:
-            self.container._proton_object.run()
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:
-            print(str(e))
-            _traceback.print_exc()
-            raise
-
-    def stop(self):
-        self.container._proton_object.stop()
-
-class _Handler(_handlers.MessagingHandler):
-    def __init__(self, container):
-        super(_Handler, self).__init__(prefetch=0)
-
-        self.container = container
-        self.completions = dict()
-        self.receive_completions = _collections.defaultdict(_collections.deque)
-
-    def _notice(self, message, *args):
-        self.container._io_thread._notice(message, *args)
-
-    def on_command(self, event):
-        command = self.container._io_thread.commands.pop()
-
-        self._notice("Executing {}", command)
-
-        command._begin()
-
-        assert command._proton_object is not None
-
-        if isinstance(command, _ReceiveCommand):
-            self.receive_completions[command._proton_object].appendleft(command)
-        else:
-            self.completions[command._proton_object] = command
-
-    def on_connection_remote_open(self, event):
-        self.completions[event.connection]._complete(event.connection)
-
-    def on_link_remote_open(self, event):
-        if event.link.is_sender:
-            self.completions[event.sender]._complete(event.sender)
-        elif event.link.is_receiver:
-            self.completions[event.receiver]._complete(event.receiver)
-
-    def on_accepted(self, event):
-        self.completions[event.delivery]._complete(event.delivery)
-
-    def on_rejected(self, event):
-        self.completions[event.delivery]._complete(event.delivery)
-
-    def on_released(self, event):
-        self.completions[event.delivery]._complete(event.delivery)
-
-    def on_message(self, event):
-        command = self.receive_completions[event.receiver].pop()
-        command._complete(event.delivery, event.message)
-
-class _Command(object):
-    def __init__(self, container):
-        self._container = container
-
-        self._proton_object = None # Set after 'begun'
-        self._result = None # Set after 'completed'
-
-        self._begun = _threading.Event()
-        self._completed = _threading.Event()
-
-    def __repr__(self):
-        return self.__class__.__name__
-
-    def _enqueue(self):
-        self._container._notice("Enqueueing {}", self)
-
-        self._container._io_thread.commands.appendleft(self)
-        self._container._io_thread.events.trigger(_reactor.ApplicationEvent("command"))
-
-    def _begin(self):
-        self._proton_object = self._create_proton_object()
-        assert self._proton_object is not None
-
-        self._begun.set()
-
-    def _create_proton_object(self):
-        raise NotImplementedError()
-
-    def _complete(self, proton_object):
-        self._result = self._wrap_result(proton_object)
-        assert self._result is not None
-
-        self._completed.set()
-
-    def _wrap_result(self, proton_object):
-        raise NotImplementedError()
-
-    def result(self):
-        self._container._notice("Waiting for result from {}", self)
-
-        self._completed.wait(timeout=3) # XXX
-        assert self._result is not None # XXX
-
-        return self._result
-
-class _ConnectCommand(_Command):
-    def __init__(self, container, connection_url):
-        super(_ConnectCommand, self).__init__(container)
-
-        self._connection_url = connection_url
-
-    def _create_proton_object(self):
-        return self._container._proton_object.connect \
-            (self._connection_url, allowed_mechs=b"ANONYMOUS")
-
-    def _wrap_result(self, proton_object):
-        return Connection(self._container, proton_object)
-
-    def open_sender(self, address):
-        command = _OpenSenderCommand(self._container, self, address)
-        command._enqueue()
-
-        return command
-
-    def open_receiver(self, address):
-        command = _OpenReceiverCommand(self._container, self, address)
-        command._enqueue()
-
-        return command
-
-class _OpenSenderCommand(_Command):
-    def __init__(self, container, connection, address):
-        super(_OpenSenderCommand, self).__init__(container)
-
-        self._connection = connection
-        self._address = address
-
-    def _create_proton_object(self):
-        return self._container._proton_object.create_sender \
-            (self._connection._proton_object, self._address)
-
-    def _wrap_result(self, proton_object):
-        return Sender(self._container, proton_object)
-
-    def send(self, message):
-        sender = self.result()
-        return sender.send(message)
-
-class _OpenReceiverCommand(_Command):
-    def __init__(self, container, connection, address):
-        super(_OpenReceiverCommand, self).__init__(container)
-
-        self._connection = connection
-        self._address = address
-
-    def _create_proton_object(self):
-        return self._container._proton_object.create_receiver \
-            (self._connection._proton_object, self._address)
-
-    def _wrap_result(self, proton_object):
-        return Receiver(self._container, proton_object)
-
-    def receive(self, count=1):
-        receiver = self.result()
-        return receiver.receive(count)
-
-class _SendCommand(_Command):
-    def __init__(self, container, sender, message):
-        super(_SendCommand, self).__init__(container)
-
-        self._sender = sender
-        self._message = message
-
-    def _create_proton_object(self):
-        return self._sender._proton_object.send(self._message._proton_object)
-
-    def _wrap_result(self, proton_object):
-        return Tracker(self._container, proton_object)
-
-class _ReceiveCommand(_Command):
-    def __init__(self, container, receiver):
-        super(_ReceiveCommand, self).__init__(container)
-
-        self._receiver = receiver
-
-    def _begin(self):
-        self._receiver._proton_object.flow(1)
-        self._proton_object = self._receiver._proton_object # XXX
-        self._begun.set()
-
-    def _complete(self, proton_object, message):
-        self._result = Delivery(self._container, proton_object, message)
-        self._completed.set()
+        return op.gambit_object
 
 class _Wrapper(object):
-    def __init__(self, container, proton_object):
+    def __init__(self, container, operation, proton_object):
         self._container = container
+        self._operation = operation
         self._proton_object = proton_object
 
-    def __repr__(self):
-        return "{} ({})".format(self.__class__.__name__, self._proton_object)
+    def wait(self, timeout=None):
+        self._operation.wait(timeout)
+        return self
 
-class Endpoint(_Wrapper):
+    def __repr__(self):
+        return "{}({})".format(self.__class__.__name__, self._proton_object)
+
+class _Endpoint(_Wrapper):
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         self._proton_object.close()
 
-class Connection(Endpoint):
+class Connection(_Endpoint):
     def open_sender(self, address):
-        command = _OpenSenderCommand(self._container, self, address)
-        command._enqueue()
+        op = _OpenSenderOperation(self._container, self, address)
+        op.enqueue()
 
-        return command
+        return op.gambit_object
 
     def open_receiver(self, address):
-        command = _OpenReceiverCommand(self._container, self, address)
-        command._enqueue()
+        op = _OpenReceiverOperation(self._container, self, address)
+        op.enqueue()
 
-        return command
+        return op.gambit_object
 
-class Sender(Endpoint):
+class Sender(_Endpoint):
     def send(self, message):
-        command = _SendCommand(self._container, self, message)
-        command._enqueue()
+        op = _SendOperation(self._container, self, message)
+        op.enqueue()
 
-        return command
+        return op.gambit_object
 
-class Receiver(Endpoint):
+class Receiver(_Endpoint):
     def receive(self, count=1):
-        command = _ReceiveCommand(self._container, self)
-        command._enqueue()
+        op = _ReceiveOperation(self._container, self)
+        op.enqueue()
 
-        return command
+        return op.gambit_object
 
 class Delivery(_Wrapper):
-    def __init__(self, container, proton_object, message):
-        super(Delivery, self).__init__(container, proton_object)
+    def __init__(self, container, operation, proton_object):
+        super(Delivery, self).__init__(container, operation, proton_object)
 
-        self._message = message
-
-    @property
-    def message(self):
-        return self._message
+        self.message = None
 
 class Tracker(_Wrapper):
     @property
@@ -345,3 +135,178 @@ class Message(object):
         self._proton_object.body = body
 
     body = property(_get_body, _set_body)
+
+class _IoThread(_threading.Thread):
+    def __init__(self, container):
+        _threading.Thread.__init__(self)
+
+        self.container = container
+
+        self.operations = _collections.deque()
+        self.events = _reactor.EventInjector()
+        self.container._proton_object.selectable(self.events)
+
+        self.name = "io"
+        self.daemon = True
+
+    def notice(self, message, *args):
+        message = message.format(*args)
+        print("[io ] {}".format(message))
+
+    def run(self):
+        try:
+            self.container._proton_object.run()
+        except KeyboardInterrupt:
+            raise
+        except:
+            _traceback.print_exc()
+            raise
+
+    def stop(self):
+        self.container._proton_object.stop()
+
+class _Handler(_handlers.MessagingHandler):
+    def __init__(self, container):
+        super(_Handler, self).__init__(prefetch=0)
+
+        self.container = container
+        self.completions = dict()
+        self.receive_completions = _collections.defaultdict(_collections.deque)
+
+    def notice(self, message, *args):
+        self.container._io_thread.notice(message, *args)
+
+    def on_operation(self, event):
+        op = self.container._io_thread.operations.pop()
+        op.begin()
+
+        if isinstance(op, _ReceiveOperation):
+            self.receive_completions[op.proton_object].appendleft(op)
+        else:
+            self.completions[op.proton_object] = op
+
+    def on_connection_remote_open(self, event):
+        self.completions[event.connection].completed.set()
+
+    def on_link_remote_open(self, event):
+        if event.link.is_sender:
+            self.completions[event.sender].completed.set()
+        elif event.link.is_receiver:
+            self.completions[event.receiver].completed.set()
+
+    def on_accepted(self, event):
+        self.completions[event.delivery].completed.set()
+
+    def on_rejected(self, event):
+        self.completions[event.delivery].completed.set()
+
+    def on_released(self, event):
+        self.completions[event.delivery].completed.set()
+
+    def on_message(self, event):
+        op = self.receive_completions[event.receiver].pop()
+        op.gambit_object.message = event.message
+        op.completed.set()
+
+class _Operation(object):
+    def __init__(self, container):
+        self.container = container
+
+        self.proton_object = None
+        self.gambit_object = None
+
+        self.begun = _threading.Event()
+        self.completed = _threading.Event()
+
+    def __repr__(self):
+        return self.__class__.__name__
+
+    def enqueue(self):
+        self.container._notice("Enqueueing {}", self)
+
+        self.container._io_thread.operations.appendleft(self)
+        self.container._io_thread.events.trigger(_reactor.ApplicationEvent("operation"))
+
+        self.begun.wait()
+
+    def begin(self):
+        self.container._io_thread.notice("Beginning {}", self)
+
+        self._begin()
+
+        assert self.proton_object is not None
+        assert self.gambit_object is not None
+
+        self.begun.set()
+
+    def wait(self, timeout=None):
+        self.container._notice("Waiting for completion of {}", self)
+        self.completed.wait(timeout)
+
+class _ConnectOperation(_Operation):
+    def __init__(self, container, connection_url):
+        super(_ConnectOperation, self).__init__(container)
+
+        self.connection_url = connection_url
+
+    def _begin(self):
+        pn_cont = self.container._proton_object
+
+        self.proton_object = pn_cont.connect(self.connection_url, allowed_mechs=b"ANONYMOUS")
+        self.gambit_object = Connection(self.container, self, self.proton_object)
+
+class _OpenSenderOperation(_Operation):
+    def __init__(self, container, connection, address):
+        super(_OpenSenderOperation, self).__init__(container)
+
+        self.connection = connection
+        self.address = address
+
+    def _begin(self):
+        pn_cont = self.container._proton_object
+        pn_conn = self.connection._proton_object
+
+        self.proton_object = pn_cont.create_sender(pn_conn, self.address)
+        self.gambit_object = Sender(self.container, self, self.proton_object)
+
+class _OpenReceiverOperation(_Operation):
+    def __init__(self, container, connection, address):
+        super(_OpenReceiverOperation, self).__init__(container)
+
+        self.connection = connection
+        self.address = address
+
+    def _begin(self):
+        pn_cont = self.container._proton_object
+        pn_conn = self.connection._proton_object
+
+        self.proton_object = pn_cont.create_receiver(pn_conn, self.address)
+        self.gambit_object = Receiver(self.container, self, self.proton_object)
+
+class _SendOperation(_Operation):
+    def __init__(self, container, sender, message):
+        super(_SendOperation, self).__init__(container)
+
+        self.sender = sender
+        self.message = message
+
+    def _begin(self):
+        pn_snd = self.sender._proton_object
+        pn_msg = self.message._proton_object
+
+        self.proton_object = pn_snd.send(pn_msg)
+        self.gambit_object = Tracker(self.container, self, self.proton_object)
+
+class _ReceiveOperation(_Operation):
+    def __init__(self, container, receiver):
+        super(_ReceiveOperation, self).__init__(container)
+
+        self.receiver = receiver
+
+    def _begin(self):
+        pn_rcv = self.receiver._proton_object
+
+        pn_rcv.flow(1)
+
+        self.proton_object = pn_rcv # XXX
+        self.gambit_object = Delivery(self.container, self, self.proton_object) # XXX
