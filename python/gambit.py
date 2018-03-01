@@ -49,15 +49,13 @@ class Container(object):
         _log("Connecting to {}", conn_url)
 
         op = _ConnectOperation(self, conn_url)
-        op.enqueue()
-
-        return op.gambit_object
+        return op.enqueue()
 
 class _Wrapper(object):
-    def __init__(self, container, operation, proton_object):
-        self._container = container
+    def __init__(self, operation):
         self._operation = operation
-        self._proton_object = proton_object
+        self._container = operation.container
+        self._proton_object = operation.proton_object
 
     def wait(self, timeout=None):
         self._operation.wait(timeout)
@@ -75,34 +73,26 @@ class _Endpoint(_Wrapper):
 
 class Connection(_Endpoint):
     def open_sender(self, address):
-        op = _OpenSenderOperation(self._container, self, address)
-        op.enqueue()
-
-        return op.gambit_object
+        op = _OpenSenderOperation(self, address)
+        return op.enqueue()
 
     def open_receiver(self, address):
-        op = _OpenReceiverOperation(self._container, self, address)
-        op.enqueue()
-
-        return op.gambit_object
+        op = _OpenReceiverOperation(self, address)
+        return op.enqueue()
 
 class Sender(_Endpoint):
     def send(self, message):
-        op = _SendOperation(self._container, self, message)
-        op.enqueue()
-
-        return op.gambit_object
+        op = _SendOperation(self, message)
+        return op.enqueue()
 
 class Receiver(_Endpoint):
     def receive(self, count=1):
-        op = _ReceiveOperation(self._container, self)
-        op.enqueue()
-
-        return op.gambit_object
+        op = _ReceiveOperation(self, count)
+        return op.enqueue()
 
 class Delivery(_Wrapper):
-    def __init__(self, container, operation, proton_object):
-        super(Delivery, self).__init__(container, operation, proton_object)
+    def __init__(self, operation):
+        super(Delivery, self).__init__(operation)
 
         self.message = None
 
@@ -164,26 +154,26 @@ class _Handler(_handlers.MessagingHandler):
         super(_Handler, self).__init__(prefetch=0)
 
         self.container = container
-        self.completions = dict()
-        self.receive_completions = _collections.defaultdict(_collections.deque)
+        self.operations = dict()
+        self.receive_operations = _collections.defaultdict(_collections.deque)
 
     def on_operation(self, event):
         op = self.container._io_thread.operations.pop()
         op.begin()
 
         if type(op) is _ReceiveOperation:
-            self.receive_completions[op.proton_object].appendleft(op)
+            self.receive_operations[op.proton_object].appendleft(op)
         else:
-            self.completions[op.proton_object] = op
+            self.operations[op.proton_object] = op
 
     def on_connection_remote_open(self, event):
-        self.completions.pop(event.connection).completed.set()
+        self.operations.pop(event.connection).completed.set()
 
     def on_link_remote_open(self, event):
-        self.completions.pop(event.link).completed.set()
+        self.operations.pop(event.link).completed.set()
 
     def on_accepted(self, event):
-        self.completions.pop(event.delivery).completed.set()
+        self.operations.pop(event.delivery).completed.set()
 
     def on_rejected(self, event):
         self.on_accepted(event)
@@ -192,7 +182,7 @@ class _Handler(_handlers.MessagingHandler):
         self.on_accepted(event)
 
     def on_message(self, event):
-        op = self.receive_completions[event.receiver].pop()
+        op = self.receive_operations[event.receiver].pop()
         op.gambit_object.message = event.message
         op.completed.set()
 
@@ -216,6 +206,8 @@ class _Operation(object):
         self.container._io_thread.events.trigger(_reactor.ApplicationEvent("operation"))
 
         self.begun.wait()
+
+        return self.gambit_object
 
     def begin(self):
         _log("Beginning {}", self)
@@ -241,11 +233,11 @@ class _ConnectOperation(_Operation):
         pn_cont = self.container._proton_object
 
         self.proton_object = pn_cont.connect(self.connection_url, allowed_mechs=b"ANONYMOUS")
-        self.gambit_object = Connection(self.container, self, self.proton_object)
+        self.gambit_object = Connection(self)
 
 class _OpenSenderOperation(_Operation):
-    def __init__(self, container, connection, address):
-        super(_OpenSenderOperation, self).__init__(container)
+    def __init__(self, connection, address):
+        super(_OpenSenderOperation, self).__init__(connection._container)
 
         self.connection = connection
         self.address = address
@@ -255,11 +247,11 @@ class _OpenSenderOperation(_Operation):
         pn_conn = self.connection._proton_object
 
         self.proton_object = pn_cont.create_sender(pn_conn, self.address)
-        self.gambit_object = Sender(self.container, self, self.proton_object)
+        self.gambit_object = Sender(self)
 
 class _OpenReceiverOperation(_Operation):
-    def __init__(self, container, connection, address):
-        super(_OpenReceiverOperation, self).__init__(container)
+    def __init__(self, connection, address):
+        super(_OpenReceiverOperation, self).__init__(connection._container)
 
         self.connection = connection
         self.address = address
@@ -269,11 +261,11 @@ class _OpenReceiverOperation(_Operation):
         pn_conn = self.connection._proton_object
 
         self.proton_object = pn_cont.create_receiver(pn_conn, self.address)
-        self.gambit_object = Receiver(self.container, self, self.proton_object)
+        self.gambit_object = Receiver(self)
 
 class _SendOperation(_Operation):
-    def __init__(self, container, sender, message):
-        super(_SendOperation, self).__init__(container)
+    def __init__(self, sender, message):
+        super(_SendOperation, self).__init__(sender._container)
 
         self.sender = sender
         self.message = message
@@ -283,21 +275,26 @@ class _SendOperation(_Operation):
         pn_msg = self.message._proton_object
 
         self.proton_object = pn_snd.send(pn_msg)
-        self.gambit_object = Tracker(self.container, self, self.proton_object)
+        self.gambit_object = Tracker(self)
 
 class _ReceiveOperation(_Operation):
-    def __init__(self, container, receiver):
-        super(_ReceiveOperation, self).__init__(container)
+    def __init__(self, receiver, count):
+        super(_ReceiveOperation, self).__init__(receiver._container)
 
         self.receiver = receiver
+        self.count = count
 
     def _begin(self):
         pn_rcv = self.receiver._proton_object
 
-        pn_rcv.flow(1)
+        pn_rcv.flow(self.count)
 
         self.proton_object = pn_rcv # XXX
-        self.gambit_object = Delivery(self.container, self, self.proton_object) # XXX
+
+        if self.count == 1:
+            self.gambit_object = Delivery(self)
+        else:
+            self.gambit_object = DeliveryIterator(self) # XXXXXXXXXXXXXXXXXXXx
 
 def _log(message, *args):
     message = message.format(*args)

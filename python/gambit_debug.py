@@ -68,6 +68,15 @@ def receive_three():
         for delivery in deliveries:
             print("RESULT: {}".format(delivery.wait().message))
 
+def receive_three_another_way():
+    with Container() as cont:
+        conn = cont.connect("127.0.0.1")
+        receiver = conn.open_receiver("examples")
+        deliveries = receiver.receive(3)
+
+        for delivery in deliveries:
+            print("RESULT: {}".format(delivery.wait().message))
+
 def main():
     send_one()
     receive_one()
