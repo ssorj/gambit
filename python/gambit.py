@@ -311,7 +311,7 @@ class _ConnectOperation(_Operation):
         pn_cont = self.container._proton_object
 
         conn_url = "amqp://{}:{}".format(self.host, self.port)
-        
+
         self.proton_object = pn_cont.connect(conn_url, allowed_mechs=b"ANONYMOUS")
         self.gambit_object = Connection(self)
 
@@ -358,6 +358,8 @@ class _SendOperation(_Operation):
     def _begin(self):
         pn_snd = self.sender._proton_object
         pn_msg = self.message._proton_object
+
+        # XXX Need to block on credit
 
         self.proton_object = pn_snd.send(pn_msg)
         self.gambit_object = Tracker(self)
