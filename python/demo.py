@@ -19,6 +19,7 @@
 
 import sys
 import threading
+import time
 
 from gambit import *
 
@@ -67,6 +68,35 @@ def receive_three(host, port):
 
         for delivery in deliveries:
             cont.log("RECEIVE: {}", delivery.wait().message)
+
+def send_indefinitely(host, port):
+    with Container("send") as cont:
+        conn = cont.connect(host, port)
+        sender = conn.open_sender("examples")
+
+        for i in range(0xffff):
+            trackers = list()
+
+            for j in range(100):
+                message = Message("message-{}-{}".format(i, j))
+                tracker = sender.send(message)
+                trackers.append(tracker)
+
+                time.sleep(0.2) # Artificially slow this down
+
+            for tracker in trackers:
+                cont.log("SEND: {}", tracker.wait().state)
+
+def receive_indefinitely(host, port):
+    with Container("receive") as cont:
+        conn = cont.connect(host, port)
+        receiver = conn.open_receiver("examples")
+
+        while True:
+            deliveries = receiver.receive(100)
+
+            for delivery in deliveries:
+                cont.log("RECEIVE: {}", delivery.wait().message)
 
 def request_one(host, port):
     with Container("request") as cont:
@@ -117,11 +147,17 @@ def main():
     except:
         sys.exit("Usage: demo HOST PORT")
 
+    # Send and receive one
+
     send_one(host, port)
     receive_one(host, port)
 
+    # Send and receive three
+
     send_three(host, port)
     receive_three(host, port)
+
+    # Request and respond to one
 
     respond_thread = threading.Thread(target=respond_one, args=(host, port))
     respond_thread.start()
@@ -130,8 +166,17 @@ def main():
 
     respond_thread.join()
 
-    # send_indefinitely()
-    # receive_indefinitely()
+    # Send and receive indefinitely
+
+    send_thread = threading.Thread(target=send_indefinitely, args=(host, port))
+    send_thread.daemon = True
+    send_thread.start()
+
+    receive_thread = threading.Thread(target=receive_indefinitely, args=(host, port))
+    receive_thread.daemon = True
+    receive_thread.start()
+
+    time.sleep(1)
 
 if __name__ == "__main__":
     try:
