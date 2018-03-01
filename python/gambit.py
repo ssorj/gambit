@@ -171,28 +171,25 @@ class _Handler(_handlers.MessagingHandler):
         op = self.container._io_thread.operations.pop()
         op.begin()
 
-        if isinstance(op, _ReceiveOperation):
+        if type(op) is _ReceiveOperation:
             self.receive_completions[op.proton_object].appendleft(op)
         else:
             self.completions[op.proton_object] = op
 
     def on_connection_remote_open(self, event):
-        self.completions[event.connection].completed.set()
+        self.completions.pop(event.connection).completed.set()
 
     def on_link_remote_open(self, event):
-        if event.link.is_sender:
-            self.completions[event.sender].completed.set()
-        elif event.link.is_receiver:
-            self.completions[event.receiver].completed.set()
+        self.completions.pop(event.link).completed.set()
 
     def on_accepted(self, event):
-        self.completions[event.delivery].completed.set()
+        self.completions.pop(event.delivery).completed.set()
 
     def on_rejected(self, event):
-        self.completions[event.delivery].completed.set()
+        self.on_accepted(event)
 
     def on_released(self, event):
-        self.completions[event.delivery].completed.set()
+        self.on_accepted(event)
 
     def on_message(self, event):
         op = self.receive_completions[event.receiver].pop()
