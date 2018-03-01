@@ -29,7 +29,9 @@ def send_one():
         sender = conn.open_sender("examples")
         tracker = sender.send(message)
 
-        print("RESULT: {}".format(tracker.wait().state))
+        tracker.wait()
+
+        print("RESULT: {}".format(tracker.state))
 
 def receive_one():
     with Container() as cont:
@@ -37,7 +39,9 @@ def receive_one():
         receiver = conn.open_receiver("examples")
         delivery = receiver.receive()
 
-        print("RESULT: {}".format(delivery.wait().message))
+        delivery.wait()
+
+        print("RESULT: {}".format(delivery.message))
 
 def send_three():
     messages = [Message("hello-{}".format(x)) for x in range(3)]
@@ -55,20 +59,6 @@ def send_three():
             print("RESULT: {}".format(tracker.wait().state))
 
 def receive_three():
-    deliveries = list()
-
-    with Container() as cont:
-        conn = cont.connect("127.0.0.1")
-        receiver = conn.open_receiver("examples")
-
-        for i in range(3):
-            delivery = receiver.receive()
-            deliveries.append(delivery)
-
-        for delivery in deliveries:
-            print("RESULT: {}".format(delivery.wait().message))
-
-def receive_three_another_way():
     with Container() as cont:
         conn = cont.connect("127.0.0.1")
         receiver = conn.open_receiver("examples")

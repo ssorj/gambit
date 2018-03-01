@@ -51,20 +51,25 @@ class Container(object):
         op = _ConnectOperation(self, conn_url)
         return op.enqueue()
 
-class _Wrapper(object):
+class _Object(object):
     def __init__(self, operation):
         self._operation = operation
         self._container = operation.container
         self._proton_object = operation.proton_object
 
-    def wait(self, timeout=None):
-        self._operation.wait(timeout)
-        return self
+        self._completed = _threading.Event()
 
     def __repr__(self):
         return "{}({})".format(self.__class__.__name__, self._proton_object)
 
-class _Endpoint(_Wrapper):
+    def _complete(self):
+        self._completed.set()
+        
+    def wait(self, timeout=None):
+        self._completed.wait(timeout)
+        return self
+
+class _Endpoint(_Object):
     def __enter__(self):
         return self
 
@@ -88,15 +93,20 @@ class Sender(_Endpoint):
 class Receiver(_Endpoint):
     def receive(self, count=1):
         op = _ReceiveOperation(self, count)
-        return op.enqueue()
+        deliveries = op.enqueue()
 
-class Delivery(_Wrapper):
+        if count == 1:
+            return deliveries[0]
+
+        return deliveries
+
+class Delivery(_Object):
     def __init__(self, operation):
         super(Delivery, self).__init__(operation)
 
         self.message = None
 
-class Tracker(_Wrapper):
+class Tracker(_Object):
     @property
     def state(self):
         return self._proton_object.remote_state
@@ -154,26 +164,32 @@ class _Handler(_handlers.MessagingHandler):
         super(_Handler, self).__init__(prefetch=0)
 
         self.container = container
-        self.operations = dict()
-        self.receive_operations = _collections.defaultdict(_collections.deque)
+        self.pending_operations = dict()
+        self.pending_deliveries = _collections.defaultdict(_collections.deque)
 
     def on_operation(self, event):
         op = self.container._io_thread.operations.pop()
         op.begin()
 
         if type(op) is _ReceiveOperation:
-            self.receive_operations[op.proton_object].appendleft(op)
+            deliveries = self.pending_deliveries[op.proton_object]
+
+            for delivery in op.gambit_object:
+                deliveries.appendleft(delivery)
         else:
-            self.operations[op.proton_object] = op
+            self.pending_operations[op.proton_object] = op
 
     def on_connection_remote_open(self, event):
-        self.operations.pop(event.connection).completed.set()
+        op = self.pending_operations.pop(event.connection)
+        op.gambit_object._complete()
 
     def on_link_remote_open(self, event):
-        self.operations.pop(event.link).completed.set()
+        op = self.pending_operations.pop(event.link)
+        op.gambit_object._complete()
 
     def on_accepted(self, event):
-        self.operations.pop(event.delivery).completed.set()
+        op = self.pending_operations.pop(event.delivery)
+        op.gambit_object._complete()
 
     def on_rejected(self, event):
         self.on_accepted(event)
@@ -182,9 +198,9 @@ class _Handler(_handlers.MessagingHandler):
         self.on_accepted(event)
 
     def on_message(self, event):
-        op = self.receive_operations[event.receiver].pop()
-        op.gambit_object.message = event.message
-        op.completed.set()
+        delivery = self.pending_deliveries[event.receiver].pop()
+        delivery.message = event.message
+        delivery._complete()
 
 class _Operation(object):
     def __init__(self, container):
@@ -194,7 +210,6 @@ class _Operation(object):
         self.gambit_object = None
 
         self.begun = _threading.Event()
-        self.completed = _threading.Event()
 
     def __repr__(self):
         return self.__class__.__name__
@@ -205,7 +220,7 @@ class _Operation(object):
         self.container._io_thread.operations.appendleft(self)
         self.container._io_thread.events.trigger(_reactor.ApplicationEvent("operation"))
 
-        self.begun.wait()
+        self.begun.wait(1)
 
         return self.gambit_object
 
@@ -286,15 +301,13 @@ class _ReceiveOperation(_Operation):
 
     def _begin(self):
         pn_rcv = self.receiver._proton_object
-
         pn_rcv.flow(self.count)
 
-        self.proton_object = pn_rcv # XXX
+        self.proton_object = pn_rcv
+        self.gambit_object = list()
 
-        if self.count == 1:
-            self.gambit_object = Delivery(self)
-        else:
-            self.gambit_object = DeliveryIterator(self) # XXXXXXXXXXXXXXXXXXXx
+        for i in range(self.count):
+            self.gambit_object.append(Delivery(self))
 
 def _log(message, *args):
     message = message.format(*args)
