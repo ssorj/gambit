@@ -19,6 +19,6 @@
 
 export PYTHONPATH := ${PWD}/python:${PYTHONPATH}
 
-.PHONY: test
-test:
-	python -m gambit_demo
+.PHONY: demo
+demo:
+	scripts/run-demo
