@@ -30,12 +30,10 @@ class Container(object):
         self._proton_object = _reactor.Container(_Handler(self), id=id)
         self._io_thread = _IoThread(self)
 
-    def _notice(self, message, *args):
-        message = message.format(*args)
-        print("[api] {}".format(message))
-
     def __enter__(self):
-        self._notice("Starting IO thread")
+        _threading.current_thread().name = "api"
+
+        _log("Starting IO thread")
 
         self._io_thread.start()
 
@@ -48,7 +46,7 @@ class Container(object):
         self._io_thread.stop()
 
     def connect(self, conn_url):
-        self._notice("Connecting to {}", conn_url)
+        _log("Connecting to {}", conn_url)
 
         op = _ConnectOperation(self, conn_url)
         op.enqueue()
@@ -149,10 +147,6 @@ class _IoThread(_threading.Thread):
         self.name = "io"
         self.daemon = True
 
-    def notice(self, message, *args):
-        message = message.format(*args)
-        print("[io ] {}".format(message))
-
     def run(self):
         try:
             self.container._proton_object.run()
@@ -172,9 +166,6 @@ class _Handler(_handlers.MessagingHandler):
         self.container = container
         self.completions = dict()
         self.receive_completions = _collections.defaultdict(_collections.deque)
-
-    def notice(self, message, *args):
-        self.container._io_thread.notice(message, *args)
 
     def on_operation(self, event):
         op = self.container._io_thread.operations.pop()
@@ -222,7 +213,7 @@ class _Operation(object):
         return self.__class__.__name__
 
     def enqueue(self):
-        self.container._notice("Enqueueing {}", self)
+        _log("Enqueueing {}", self)
 
         self.container._io_thread.operations.appendleft(self)
         self.container._io_thread.events.trigger(_reactor.ApplicationEvent("operation"))
@@ -230,7 +221,7 @@ class _Operation(object):
         self.begun.wait()
 
     def begin(self):
-        self.container._io_thread.notice("Beginning {}", self)
+        _log("Beginning {}", self)
 
         self._begin()
 
@@ -240,7 +231,7 @@ class _Operation(object):
         self.begun.set()
 
     def wait(self, timeout=None):
-        self.container._notice("Waiting for completion of {}", self)
+        _log("Waiting for completion of {}", self)
         self.completed.wait(timeout)
 
 class _ConnectOperation(_Operation):
@@ -310,3 +301,9 @@ class _ReceiveOperation(_Operation):
 
         self.proton_object = pn_rcv # XXX
         self.gambit_object = Delivery(self.container, self, self.proton_object) # XXX
+
+def _log(message, *args):
+    message = message.format(*args)
+    thread = _threading.current_thread().name
+
+    print("[{:3}] {}".format(thread, message))
