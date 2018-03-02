@@ -222,8 +222,6 @@ class _Handler(_handlers.MessagingHandler):
 
         self.container = container
 
-        self.container.handler = self # XXX
-
         self.pending_operations = dict()
         self.pending_deliveries = _collections.defaultdict(_collections.deque)
 
