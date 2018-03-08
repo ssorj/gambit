@@ -26,6 +26,8 @@ import proton as _proton
 import proton.handlers as _handlers
 import proton.reactor as _reactor
 
+_log_mutex = _threading.Lock()
+
 class Container(object):
     def __init__(self, id=None):
         self._proton_object = _reactor.Container(_Handler(self))
@@ -33,20 +35,19 @@ class Container(object):
         if id is not None:
             self._proton_object.container_id = id
 
-        self._io_thread = _IoThread(self)
-        self._log_mutex = _threading.Lock()
+        self._worker_thread = _WorkerThread(self)
 
     def __enter__(self):
-        _threading.current_thread().name = "api"
+        _threading.current_thread().name = "user"
 
         self.log("Starting IO thread")
 
-        self._io_thread.start()
+        self._worker_thread.start()
 
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self._io_thread.stop()
+        self._worker_thread.stop()
 
     @property
     def id(self):
@@ -59,11 +60,11 @@ class Container(object):
         return op.enqueue()
 
     def log(self, message, *args):
-        with self._log_mutex:
+        with _log_mutex:
             message = message.format(*args)
             thread = _threading.current_thread()
 
-            _sys.stdout.write("[{:.4}:{:3}] {}\n".format(self.id, thread.name, message))
+            _sys.stdout.write("[{:.4}:{:.4}] {}\n".format(self.id, thread.name, message))
             _sys.stdout.flush()
 
 class _Sequence(object):
@@ -85,7 +86,7 @@ class _Object(object):
     def __repr__(self):
         return "{}({})".format(self.__class__.__name__, self._proton_object)
 
-    def _complete(self):
+    def _set_completed(self):
         self._completed.set()
         self._container.log("Completed {}", self)
 
@@ -194,7 +195,7 @@ class Message(object):
 
     body = property(_get_body, _set_body)
 
-class _IoThread(_threading.Thread):
+class _WorkerThread(_threading.Thread):
     def __init__(self, container):
         _threading.Thread.__init__(self)
 
@@ -204,7 +205,7 @@ class _IoThread(_threading.Thread):
         self.events = _reactor.EventInjector()
         self.container._proton_object.selectable(self.events)
 
-        self.name = "io"
+        self.name = "worker"
         self.daemon = True
 
     def run(self):
@@ -226,7 +227,7 @@ class _Handler(_handlers.MessagingHandler):
         self.pending_deliveries = _collections.defaultdict(_collections.deque)
 
     def on_operation(self, event):
-        op = self.container._io_thread.operations.pop()
+        op = self.container._worker_thread.operations.pop()
         op.begin()
 
         if type(op) is _ReceiveOperation:
@@ -239,15 +240,15 @@ class _Handler(_handlers.MessagingHandler):
 
     def on_connection_opened(self, event):
         op = self.pending_operations.pop(event.connection)
-        op.gambit_object._complete()
+        op.gambit_object._set_completed()
 
     def on_link_opened(self, event):
         op = self.pending_operations.pop(event.link)
-        op.gambit_object._complete()
+        op.gambit_object._set_completed()
 
     def on_accepted(self, event):
         op = self.pending_operations.pop(event.delivery)
-        op.gambit_object._complete()
+        op.gambit_object._set_completed()
 
     def on_rejected(self, event):
         self.on_accepted(event)
@@ -259,7 +260,7 @@ class _Handler(_handlers.MessagingHandler):
         delivery = self.pending_deliveries[event.receiver].pop()
         delivery.message = event.message
 
-        delivery._complete()
+        delivery._set_completed()
 
 class _Operation(object):
     def __init__(self, container):
@@ -276,8 +277,8 @@ class _Operation(object):
     def enqueue(self):
         self.container.log("Enqueueing {}", self)
 
-        self.container._io_thread.operations.appendleft(self)
-        self.container._io_thread.events.trigger(_reactor.ApplicationEvent("operation"))
+        self.container._worker_thread.operations.appendleft(self)
+        self.container._worker_thread.events.trigger(_reactor.ApplicationEvent("operation"))
 
         while not self.begun.wait(1):
             pass
@@ -307,7 +308,6 @@ class _ConnectOperation(_Operation):
 
     def _begin(self):
         pn_cont = self.container._proton_object
-
         conn_url = "amqp://{}:{}".format(self.host, self.port)
 
         self.proton_object = pn_cont.connect(conn_url, allowed_mechs=b"ANONYMOUS")
