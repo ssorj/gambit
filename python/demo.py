@@ -53,11 +53,10 @@ def send_three(host, port):
         sender = conn.open_sender("examples")
 
         for message in messages:
-            tracker = sender.send(message)
-            trackers.append(tracker)
+            sender.send(message, lambda x: trackers.append(x))
 
         for tracker in trackers:
-            tracker.wait_for_update()
+            # tracker.wait_for_update() XXX
             cont.log("SEND: {}", tracker.state)
 
 def receive_three(host, port):
@@ -80,6 +79,7 @@ def send_indefinitely(host, port):
         for i in range(0xffff):
             message = Message("message-{}".format(i))
             sender.send(message, completion_fn=completion_fn)
+            time.sleep(0.2)
 
 def receive_indefinitely(host, port):
     with Container("receive") as cont:
@@ -102,11 +102,11 @@ def request_one(host, port):
         request = Message("abc")
         request.reply_to = receiver.source.address
 
-        tracker = sender.send(request)
+        sender.send(request) # XXX bring back tracker?
         delivery = receiver.receive()
         response = delivery.message
 
-        cont.log("RESULT: {} ({}), {} ", request.body, tracker.state, response.body)
+        cont.log("RESULT: {}, {} ", request.body, response.body)
 
 def respond_one(host, port):
     with Container("respond") as cont:
@@ -120,10 +120,9 @@ def respond_one(host, port):
         response = Message(request.body.upper())
         response.to = request.reply_to
 
-        tracker = sender.send(response)
-        tracker.wait_for_update()
+        sender.send(response) # XXX Awkward - I want a blocking send sometimes
 
-        cont.log("RESULT: {}, {} ({})", request.body, response.body, tracker.state)
+        cont.log("RESULT: {}, {}", request.body, response.body)
 
 def main():
     try:

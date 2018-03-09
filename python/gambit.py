@@ -38,21 +38,30 @@ class Container(object):
 
         self._operations = _queue.Queue()
         self._worker_thread = _WorkerThread(self)
-        self._event_injector = _reactor.EventInjector()
-        self._receiver_queues = _collections.defaultdict(_queue.Queue)
 
+        self._event_injector = _reactor.EventInjector()
         self._proton_object.selectable(self._event_injector)
+
+        # Each item is (proton message, sent event, completion function)
+        self._sender_queues = _collections.defaultdict(_queue.Queue)
+
+        # Each item is (proton delivery, proton message)
+        self._receiver_queues = _collections.defaultdict(_queue.Queue)
 
         self._connections = set()
 
     def __enter__(self):
-        _threading.current_thread().name = "user"
-
-        self._worker_thread.start()
-
+        self.start()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        self.stop()
+
+    def start(self):
+        _threading.current_thread().name = "user"
+        self._worker_thread.start()
+
+    def stop(self):
         for conn in self._connections:
             conn.close()
 
@@ -128,21 +137,31 @@ class Connection(_Endpoint):
         return op.gambit_object
 
 class Sender(_Endpoint):
-    def send(self, message, completion_fn=None):
-        op = _MessageSend(self.container, self, message, completion_fn)
-        op.wait_for_start()
+    def __init__(self, container, proton_object, open_operation):
+        super(Sender, self).__init__(container, proton_object, open_operation)
 
-        return op.gambit_object
+        self.target = Terminus(self._proton_object.remote_target)
+        self._queue = self.container._sender_queues[self._proton_object]
+        self._message_sent = _threading.Event()
+
+    def send(self, message, completion_fn=None):
+        self._queue.put((message._proton_object, self._message_sent, completion_fn))
+
+        event = _reactor.ApplicationEvent("message_enqueued", subject=self._proton_object)
+        self.container._event_injector.trigger(event)
+
+        while not self._message_sent.wait(1):
+            pass
+
+        self._message_sent.clear()
 
 class Receiver(_Endpoint):
     def __init__(self, container, proton_object, open_operation):
         super(Receiver, self).__init__(container, proton_object, open_operation)
 
-        self.source = Source(self._proton_object.remote_source)
+        self.source = Terminus(self._proton_object.remote_source)
         self._queue = self.container._receiver_queues[self._proton_object]
 
-    # XXX Timeout arg with magic value for no wait? or try_receive
-    # XXX Advance credit by one if credit is zero?
     def receive(self):
         self.container.log("Receiving from {}", self)
 
@@ -156,7 +175,7 @@ class Receiver(_Endpoint):
     def __iter__(self):
         return self
 
-class Source(object):
+class Terminus(object):
     def __init__(self, proton_object):
         self._proton_object = proton_object
 
@@ -169,17 +188,9 @@ class Source(object):
     address = property(_get_address, _set_address)
 
 class Tracker(_Object):
-    def __init__(self, container, proton_object, send_operation):
-        super(Tracker, self).__init__(container, proton_object)
-
-        self._send_operation = send_operation
-
     @property
     def state(self):
         return self._proton_object.remote_state
-
-    def wait_for_update(self):
-        return self._send_operation.wait_for_completion()
 
 class Delivery(_Object):
     def __init__(self, container, proton_object, message):
@@ -230,6 +241,7 @@ class _WorkerThread(_threading.Thread):
 
         self.container = container
         self.name = "worker"
+        self.daemon = True
 
     def start(self):
         self.container.log("Starting the worker thread")
@@ -247,21 +259,19 @@ class _WorkerThread(_threading.Thread):
 
         self.container._proton_object.stop()
 
-        # XXX Why is this slow?
-        self.join()
-
 class _Handler(_handlers.MessagingHandler):
     def __init__(self, container):
         super(_Handler, self).__init__()
 
         self.container = container
+
+        # Keyed by (operation class, proton object)
         self.pending_operations = dict()
 
-    def on_operation(self, event):
+    def on_operation_enqueued(self, event):
         op = self.container._operations.get()
         op.start()
 
-        # Keyed by operation class and proton object
         self.pending_operations[(op.__class__, op.proton_object)] = op
 
     def on_connection_opened(self, event):
@@ -285,8 +295,9 @@ class _Handler(_handlers.MessagingHandler):
         op.complete()
 
     def on_acknowledged(self, event):
-        op = self.pending_operations.pop((_MessageSend, event.delivery))
-        op.complete()
+        pass
+        # op = self.pending_operations.pop((_MessageSend, event.delivery))
+        # op.complete()
 
     def on_accepted(self, event):
         self.on_acknowledged(event)
@@ -296,6 +307,30 @@ class _Handler(_handlers.MessagingHandler):
 
     def on_released(self, event):
         self.on_acknowledged(event)
+
+    def on_message_enqueued(self, event):
+        self.send_messages(event.subject)
+
+    def on_sendable(self, event):
+        self.send_messages(event.sender)
+
+    def send_messages(self, sender):
+        queue = self.container._sender_queues[sender] # XXX -> _gambit_senders
+
+        while sender.credit > 0 and not queue.empty():
+            message, sent_event, completion_fn = queue.get()
+
+            delivery = sender.send(message)
+
+            sent_event.set()
+
+            # XXX Wrong place
+            # tracker = Tracker(self.container, delivery)
+
+            # if completion_fn is not None:
+            #     completion_fn()
+
+            self.container.log("Sent message {}", message)
 
     def on_message(self, event):
         self.container.log("Received message {}", event.message)
@@ -314,7 +349,7 @@ class _Operation(object):
         self.completed = _threading.Event()
 
         self.container._operations.put(self)
-        self.container._event_injector.trigger(_reactor.ApplicationEvent("operation"))
+        self.container._event_injector.trigger(_reactor.ApplicationEvent("operation_enqueued"))
 
     def __repr__(self):
         return self.__class__.__name__
@@ -410,24 +445,3 @@ class _ReceiverOpen(_Operation):
 
         self.proton_object = pn_container.create_receiver(pn_connection, self.address, dynamic=dynamic)
         self.gambit_object = Receiver(self.container, self.proton_object, self)
-
-class _MessageSend(_Operation):
-    def __init__(self, container, sender, message, completion_fn):
-        super(_MessageSend, self).__init__(container)
-
-        self.sender = sender
-        self.message = message
-        self.completion_fn = completion_fn
-
-    def on_start(self):
-        pn_sender = self.sender._proton_object
-        pn_message = self.message._proton_object
-
-        # XXX Need to block on credit
-
-        self.proton_object = pn_sender.send(pn_message)
-        self.gambit_object = Tracker(self.container, self.proton_object, self)
-
-    def on_completion(self):
-        if self.completion_fn is not None:
-            self.completion_fn(self.gambit_object)
