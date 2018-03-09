@@ -69,7 +69,6 @@ class Container(object):
         self.log("Connecting to {}:{}", host, port)
 
         op = _ConnectionOpen(self, host, port)
-        op.enqueue()
         op.wait_for_start()
 
         self._connections.add(op.gambit_object)
@@ -97,7 +96,7 @@ class _Endpoint(_Object):
         super(_Endpoint, self).__init__(container, proton_object)
 
         self._open_operation = open_operation
-        self._close_operation = _EndpointClose(self.container, self)
+        self._close_operation = 
 
     def __enter__(self):
         return self
@@ -106,12 +105,13 @@ class _Endpoint(_Object):
         self.close()
 
     def close(self):
-        self._close_operation.enqueue()
+        self._close_operation = _EndpointClose(self.container, self)
 
     def wait_for_open(self):
         self._open_operation.wait_for_completion()
 
     def wait_for_close(self):
+        assert self._close_operation is not None
         self._close_operation.wait_for_completion()
 
 class Connection(_Endpoint):
@@ -318,10 +318,12 @@ class _Operation(object):
         self.started = _threading.Event()
         self.completed = _threading.Event()
 
+        self._enqueue(self)
+
     def __repr__(self):
         return self.__class__.__name__
 
-    def enqueue(self):
+    def _enqueue(self):
         self.container.log("Enqueueing {}", self)
 
         self.container._operations.put(self)
@@ -416,8 +418,7 @@ class _ReceiverOpen(_Operation):
         if self.address is None:
             dynamic = True
 
-        self.proton_object = pn_container.create_receiver(pn_connection, self.address,
-                                                          dynamic=dynamic)
+        self.proton_object = pn_container.create_receiver(pn_connection, self.address, dynamic=dynamic)
         self.gambit_object = Receiver(self.container, self.proton_object, self)
 
 class _MessageSend(_Operation):
