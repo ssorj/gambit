@@ -88,42 +88,14 @@ class Container(object):
             _sys.stdout.write("[{:.4}:{:.4}] {}\n".format(self.id, thread.name, message))
             _sys.stdout.flush()
 
-class Message(object):
-    def __init__(self, body=None, _proton_object=None):
-        self._proton_object = _proton_object
-
-        if _proton_object is None:
-            self._proton_object = _proton.Message()
-
-        if body is not None:
-            self.body = body
-
-    def __repr__(self):
-        return "{}({})".format(self.__class__.__name__, self._proton_object)
-
+class Message(_proton.Message):
     def _get_to(self):
-        return self._proton_object.address
+        return self.address
 
     def _set_to(self, address):
-        self._proton_object.address = address
+        self.address = address
 
     to = property(_get_to, _set_to)
-
-    def _get_reply_to(self):
-        return self._proton_object.reply_to
-
-    def _set_reply_to(self, address):
-        self._proton_object.reply_to = address
-
-    reply_to = property(_get_reply_to, _set_reply_to)
-
-    def _get_body(self):
-        return self._proton_object.body
-
-    def _set_body(self, body):
-        self._proton_object.body = body
-
-    body = property(_get_body, _set_body)
 
 class _Object(object):
     def __init__(self, container, proton_object):
@@ -257,7 +229,7 @@ class _Sender(_Endpoint):
         self.container._senders_by_proton_object[self._proton_object] = self
 
     def send(self, message, completion_fn=None):
-        self._message_queue.put((message._proton_object, completion_fn))
+        self._message_queue.put((message, completion_fn))
 
         event = _reactor.ApplicationEvent("message_enqueued", subject=self._proton_object)
         self.container._event_injector.trigger(event)
@@ -293,7 +265,7 @@ class _Receiver(_Endpoint):
 
     def receive(self):
         pn_delivery, pn_message = self._delivery_queue.get()
-        return _Transfer(self.container, pn_delivery, Message(_proton_object=pn_message))
+        return _Transfer(self.container, pn_delivery, pn_message)
 
     def next(self):
         return self.receive()
@@ -400,10 +372,9 @@ class _Handler(_handlers.MessagingHandler):
         op.complete()
 
     def on_acknowledged(self, event):
-        pn_message, completion_fn = self.pending_deliveries.pop(event.delivery)
+        message, completion_fn = self.pending_deliveries.pop(event.delivery)
 
         if completion_fn is not None:
-            message = Message(_proton_object=pn_message)
             tracker = _Transfer(self.container, event.delivery, message)
             completion_fn(tracker)
 
