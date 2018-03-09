@@ -62,7 +62,7 @@ class Container(object):
             conn.close()
 
         for conn in self._connections:
-            conn.wait_for_close()
+            conn.await_close()
 
         self._worker_thread.stop()
 
@@ -74,7 +74,7 @@ class Container(object):
         self.log("Connecting to {}:{}", host, port)
 
         op = _ConnectionOpen(self, host, port)
-        op.wait_for_start()
+        op.await_start()
 
         self._connections.add(op.gambit_object)
 
@@ -134,7 +134,7 @@ class _Operation(object):
     def on_start(self):
         raise NotImplementedError()
 
-    def wait_for_start(self):
+    def await_start(self):
         self.container.log("Waiting for start of {}", self)
 
         while not self.started.wait(1):
@@ -149,7 +149,7 @@ class _Operation(object):
     def on_completion(self):
         pass
 
-    def wait_for_completion(self):
+    def await_completion(self):
         self.container.log("Waiting for completion of {}", self)
 
         while not self.completed.wait(1):
@@ -171,12 +171,12 @@ class _Endpoint(_Object):
     def close(self):
         self._close_operation = _EndpointClose(self.container, self)
 
-    def wait_for_open(self):
-        self._open_operation.wait_for_completion()
+    def await_open(self):
+        self._open_operation.await_completion()
 
-    def wait_for_close(self):
+    def await_close(self):
         assert self._close_operation is not None
-        self._close_operation.wait_for_completion()
+        self._close_operation.await_completion()
 
 class _EndpointClose(_Operation):
     def __init__(self, container, endpoint):
@@ -193,13 +193,19 @@ class _EndpointClose(_Operation):
 class _Connection(_Endpoint):
     def open_sender(self, address=None):
         op = _SenderOpen(self.container, self, address)
-        op.wait_for_start()
+        op.await_start()
 
         return op.gambit_object
 
-    def open_receiver(self, address=None):
+    def open_receiver(self, address):
         op = _ReceiverOpen(self.container, self, address)
-        op.wait_for_start()
+        op.await_start()
+
+        return op.gambit_object
+
+    def open_dynamic_receiver(self):
+        op = _ReceiverOpen(self.container, self, None)
+        op.await_completion()
 
         return op.gambit_object
 

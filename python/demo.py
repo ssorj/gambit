@@ -92,36 +92,32 @@ def request_one(host, port):
     with Container("request") as cont:
         conn = cont.connect(host, port)
         sender = conn.open_sender("requests")
-        receiver = conn.open_receiver()
-
-        # DISCUSS: Need to wait for dynamic receiver source address.
-        # Build this into the open_receiver() no-args behavior?
-        receiver.wait_for_open()
+        receiver = conn.open_dynamic_receiver()
 
         request = Message("abc")
         request.reply_to = receiver.source.address
 
-        sender.send(request) # XXX bring back tracker?
+        sender.send(request)
         delivery = receiver.receive()
-        response = delivery.message
 
-        cont.log("RESULT: {}, {} ", request.body, response.body)
+        cont.log("Sent {} and received {}", request, delivery.message)
 
 def respond_one(host, port):
     with Container("respond") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("requests")
-        sender = conn.open_sender()
+        sender = conn.open_sender() # XXX Connection level send
 
         delivery = receiver.receive()
-        request = delivery.message
 
-        response = Message(request.body.upper())
-        response.to = request.reply_to
+        response = Message(delivery.message.body.upper())
+        response.to = delivery.message.reply_to
 
-        sender.send(response) # XXX Awkward - I want a blocking send sometimes
+        sender.send(response)
 
-        cont.log("RESULT: {}, {}", request.body, response.body)
+        # XXX Awkward - I want a blocking send sometimes
+
+        cont.log("Processed {} and sent {}", delivery.message, response)
 
 def main():
     try:
