@@ -29,21 +29,21 @@ def send_one(host, port):
     with Container("send") as cont:
         conn = cont.connect(host, port)
         sender = conn.open_sender("examples")
-
         tracker = sender.send(message)
-        tracker.wait()
+        tracker.wait_for_update()
 
-        cont.log("SEND: {}", tracker.state)
+        cont.log("Sent message {}", message)
 
 def receive_one(host, port):
     with Container("receive") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("examples")
-
         delivery = receiver.receive()
-        delivery.wait()
 
-        cont.log("RECEIVE: {}", delivery.message)
+        cont.log("Received message {}", delivery.message)
+
+# send_one_with_tracker_wait
+# send_one_with_completion_fn
 
 def send_three(host, port):
     messages = [Message("hello-{}".format(x)) for x in range(3)]
@@ -58,45 +58,37 @@ def send_three(host, port):
             trackers.append(tracker)
 
         for tracker in trackers:
-            cont.log("SEND: {}", tracker.wait().state)
+            tracker.wait_for_update()
+            cont.log("SEND: {}", tracker.state)
 
 def receive_three(host, port):
     with Container("receive") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("examples")
-        deliveries = receiver.receive(3)
 
-        for delivery in deliveries:
-            cont.log("RECEIVE: {}", delivery.wait().message)
+        for i in range(3):
+            delivery = receiver.receive()
+            cont.log("RECEIVE: {}", delivery.message)
 
 def send_indefinitely(host, port):
     with Container("send") as cont:
         conn = cont.connect(host, port)
         sender = conn.open_sender("examples")
 
+        def completion_fn(tracker):
+            cont.log("SEND: {}", tracker.state)
+
         for i in range(0xffff):
-            trackers = list()
-
-            for j in range(100):
-                message = Message("message-{}-{}".format(i, j))
-                tracker = sender.send(message)
-                trackers.append(tracker)
-
-                time.sleep(0.2) # Artificially slow this down
-
-            for tracker in trackers:
-                cont.log("SEND: {}", tracker.wait().state)
+            message = Message("message-{}".format(i))
+            sender.send(message, completion_fn=completion_fn)
 
 def receive_indefinitely(host, port):
     with Container("receive") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("examples")
 
-        while True:
-            deliveries = receiver.receive(100)
-
-            for delivery in deliveries:
-                cont.log("RECEIVE: {}", delivery.wait().message)
+        for delivery in receiver:
+            cont.log("RECEIVE: {}", delivery.message)
 
 def request_one(host, port):
     with Container("request") as cont:
@@ -106,17 +98,13 @@ def request_one(host, port):
 
         # DISCUSS: Need to wait for dynamic receiver source address.
         # Build this into the open_receiver() no-args behavior?
-        receiver.wait()
+        receiver.wait_for_open()
 
         request = Message("abc")
         request.reply_to = receiver.source.address
 
         tracker = sender.send(request)
         delivery = receiver.receive()
-
-        tracker.wait()
-        delivery.wait()
-
         response = delivery.message
 
         cont.log("RESULT: {} ({}), {} ", request.body, tracker.state, response.body)
@@ -128,15 +116,13 @@ def respond_one(host, port):
         sender = conn.open_sender()
 
         delivery = receiver.receive()
-        delivery.wait()
-
         request = delivery.message
 
         response = Message(request.body.upper())
         response.to = request.reply_to
 
         tracker = sender.send(response)
-        tracker.wait()
+        tracker.wait_for_update()
 
         cont.log("RESULT: {}, {} ({})", request.body, response.body, tracker.state)
 
