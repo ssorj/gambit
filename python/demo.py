@@ -56,8 +56,7 @@ def send_three(host, port):
             sender.send(message, lambda x: trackers.append(x))
 
         for tracker in trackers:
-            # tracker.wait_for_update() XXX
-            cont.log("SEND: {}", tracker.state)
+            cont.log("Sent {} ({})", tracker.message, tracker.state)
 
 def receive_three(host, port):
     with Container("receive") as cont:
@@ -66,7 +65,7 @@ def receive_three(host, port):
 
         for i in range(3):
             delivery = receiver.receive()
-            cont.log("RECEIVE: {}", delivery.message)
+            cont.log("Received {}", delivery.message)
 
 def send_indefinitely(host, port):
     with Container("send") as cont:
@@ -74,7 +73,7 @@ def send_indefinitely(host, port):
         sender = conn.open_sender("examples")
 
         def completion_fn(tracker):
-            cont.log("SEND: {}", tracker.state)
+            cont.log("Sent {} ({})", tracker.message, tracker.state)
 
         for i in range(0xffff):
             message = Message("message-{}".format(i))
@@ -87,7 +86,7 @@ def receive_indefinitely(host, port):
         receiver = conn.open_receiver("examples")
 
         for delivery in receiver:
-            cont.log("RECEIVE: {}", delivery.message)
+            cont.log("Received {}", delivery.message)
 
 def request_one(host, port):
     with Container("request") as cont:

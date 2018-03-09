@@ -249,7 +249,7 @@ class _Sender(_Endpoint):
     def __init__(self, container, proton_object, open_operation):
         super(_Sender, self).__init__(container, proton_object, open_operation)
 
-        self.target = _Terminus(self._proton_object.remote_target)
+        self.target = _Terminus(self.container, self._proton_object.remote_target)
 
         self._message_queue = _queue.Queue()
         self._message_sent = _threading.Event()
@@ -285,7 +285,7 @@ class _Receiver(_Endpoint):
     def __init__(self, container, proton_object, open_operation):
         super(_Receiver, self).__init__(container, proton_object, open_operation)
 
-        self.source = _Terminus(self._proton_object.remote_source)
+        self.source = _Terminus(self.container, self._proton_object.remote_source)
 
         self._delivery_queue = _queue.Queue()
 
@@ -293,7 +293,7 @@ class _Receiver(_Endpoint):
 
     def receive(self):
         pn_delivery, pn_message = self._delivery_queue.get()
-        return _Delivery(self.container, pn_delivery, Message(_proton_object=pn_message))
+        return _Transfer(self.container, pn_delivery, Message(_proton_object=pn_message))
 
     def next(self):
         return self.receive()
@@ -319,10 +319,7 @@ class _ReceiverOpen(_Operation):
         self.proton_object = pn_container.create_receiver(pn_connection, self.address, dynamic=dynamic)
         self.gambit_object = _Receiver(self.container, self.proton_object, self)
 
-class _Terminus(object):
-    def __init__(self, proton_object):
-        self._proton_object = proton_object
-
+class _Terminus(_Object):
     def _get_address(self):
         return self._proton_object.address
 
@@ -331,16 +328,15 @@ class _Terminus(object):
 
     address = property(_get_address, _set_address)
 
-class _Tracker(_Object):
+class _Transfer(_Object):
+    def __init__(self, container, proton_object, message):
+        super(_Transfer, self).__init__(container, proton_object)
+
+        self.message = message
+
     @property
     def state(self):
         return self._proton_object.remote_state
-
-class _Delivery(_Object):
-    def __init__(self, container, proton_object, message):
-        super(_Delivery, self).__init__(container, proton_object)
-
-        self.message = message
 
 class _WorkerThread(_threading.Thread):
     def __init__(self, container):
@@ -374,7 +370,7 @@ class _Handler(_handlers.MessagingHandler):
 
         # (operation class, proton endpoint) => operation
         self.pending_operations = dict()
-        # proton delivery => completion_fn
+        # proton delivery => (proton_message, completion_fn)
         self.pending_deliveries = dict()
 
     def on_operation_enqueued(self, event):
@@ -404,10 +400,11 @@ class _Handler(_handlers.MessagingHandler):
         op.complete()
 
     def on_acknowledged(self, event):
-        completion_fn = self.pending_deliveries.pop(event.delivery)
+        pn_message, completion_fn = self.pending_deliveries.pop(event.delivery)
 
         if completion_fn is not None:
-            tracker = _Tracker(self.container, event.delivery)
+            message = Message(_proton_object=pn_message)
+            tracker = _Transfer(self.container, event.delivery, message)
             completion_fn(tracker)
 
     def on_accepted(self, event):
@@ -436,12 +433,8 @@ class _Handler(_handlers.MessagingHandler):
             delivery = sender.send(message)
             sent.set()
 
-            self.pending_deliveries[delivery] = completion_fn
-
-            self.container.log("Sent message {}", message)
+            self.pending_deliveries[delivery] = (message, completion_fn)
 
     def on_message(self, event):
-        self.container.log("Received message {}", event.message)
-
         gb_receiver = self.container._receivers_by_proton_object[event.receiver]
         gb_receiver._delivery_queue.put((event.delivery, event.message))
