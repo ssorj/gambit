@@ -372,8 +372,10 @@ class _Handler(_handlers.MessagingHandler):
 
         self.container = container
 
-        # (operation class, proton object) => operation
+        # (operation class, proton endpoint) => operation
         self.pending_operations = dict()
+        # proton delivery => completion_fn
+        self.pending_deliveries = dict()
 
     def on_operation_enqueued(self, event):
         op = self.container._operations.get()
@@ -402,9 +404,11 @@ class _Handler(_handlers.MessagingHandler):
         op.complete()
 
     def on_acknowledged(self, event):
-        pass
-        # op = self.pending_operations.pop((_MessageSend, event.delivery))
-        # op.complete()
+        completion_fn = self.pending_deliveries.pop(event.delivery)
+
+        if completion_fn is not None:
+            tracker = _Tracker(self.container, event.delivery)
+            completion_fn(tracker)
 
     def on_accepted(self, event):
         self.on_acknowledged(event)
@@ -415,11 +419,11 @@ class _Handler(_handlers.MessagingHandler):
     def on_released(self, event):
         self.on_acknowledged(event)
 
-    def on_message_enqueued(self, event):
-        self.send_messages(event.subject)
-
     def on_sendable(self, event):
         self.send_messages(event.sender)
+
+    def on_message_enqueued(self, event):
+        self.send_messages(event.subject)
 
     def send_messages(self, sender):
         gb_sender = self.container._senders_by_proton_object[sender]
@@ -432,11 +436,7 @@ class _Handler(_handlers.MessagingHandler):
             delivery = sender.send(message)
             sent.set()
 
-            # XXX Wrong place
-            # tracker = Tracker(self.container, delivery)
-
-            # if completion_fn is not None:
-            #     completion_fn()
+            self.pending_deliveries[delivery] = completion_fn
 
             self.container.log("Sent message {}", message)
 
