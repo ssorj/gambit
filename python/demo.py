@@ -23,7 +23,7 @@ import time
 
 from gambit import *
 
-def send_one(host, port):
+def send_once(host, port):
     message = Message("hello")
 
     with Container("send") as cont:
@@ -33,7 +33,7 @@ def send_one(host, port):
 
         cont.log("Sent message {}", message)
 
-def receive_one(host, port):
+def receive_once(host, port):
     with Container("receive") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("examples")
@@ -41,7 +41,7 @@ def receive_one(host, port):
 
         cont.log("Received message {}", delivery.message)
 
-def send_three(host, port):
+def send_thrice(host, port):
     messages = [Message("hello-{}".format(x)) for x in range(3)]
     trackers = list()
 
@@ -55,7 +55,7 @@ def send_three(host, port):
         for tracker in trackers:
             cont.log("Sent {} ({})", tracker.message, tracker.state)
 
-def receive_three(host, port):
+def receive_thrice(host, port):
     with Container("receive") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("examples")
@@ -85,7 +85,7 @@ def receive_indefinitely(host, port):
         for delivery in receiver:
             cont.log("Received {}", delivery.message)
 
-def request_one(host, port):
+def request_once(host, port):
     with Container("request") as cont:
         conn = cont.connect(host, port)
         sender = conn.open_sender("requests")
@@ -93,13 +93,14 @@ def request_one(host, port):
 
         request = Message("abc")
         request.reply_to = receiver.source.address
+
         sender.send(request)
 
         delivery = receiver.receive()
 
         cont.log("Sent {} and received {}", request, delivery.message)
 
-def respond_one(host, port):
+def respond_once(host, port):
     with Container("respond") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("requests")
@@ -108,6 +109,7 @@ def respond_one(host, port):
 
         response = Message(delivery.message.body.upper())
         response.to = delivery.message.reply_to
+
         conn.send(response)
 
         cont.log("Processed {} and sent {}", delivery.message, response)
@@ -119,22 +121,22 @@ def main():
     except:
         sys.exit("Usage: demo HOST PORT")
 
-    # Send and receive one
+    # Send and receive once
 
-    send_one(host, port)
-    receive_one(host, port)
+    send_once(host, port)
+    receive_once(host, port)
 
-    # Send and receive three
+    # Send and receive three times
 
-    send_three(host, port)
-    receive_three(host, port)
+    send_thrice(host, port)
+    receive_thrice(host, port)
 
-    # Request and respond to one
+    # Request once and respond once
 
-    respond_thread = threading.Thread(target=respond_one, args=(host, port))
+    respond_thread = threading.Thread(target=respond_once, args=(host, port))
     respond_thread.start()
 
-    request_one(host, port)
+    request_once(host, port)
 
     respond_thread.join()
 
