@@ -41,9 +41,6 @@ def receive_one(host, port):
 
         cont.log("Received message {}", delivery.message)
 
-# send_one_with_tracker_wait
-# send_one_with_completion_fn
-
 def send_three(host, port):
     messages = [Message("hello-{}".format(x)) for x in range(3)]
     trackers = list()

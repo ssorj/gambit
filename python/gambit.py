@@ -273,11 +273,15 @@ class _Receiver(_Endpoint):
         pn_delivery, pn_message = self._delivery_queue.get()
         return _Transfer(self.container, pn_delivery, pn_message)
 
-    def next(self):
-        return self.receive()
-
     def __iter__(self):
-        return self
+        return _ReceiverIterator(self)
+
+class _ReceiverIterator(object):
+    def __init__(self, receiver):
+        self._receiver = receiver
+
+    def next(self):
+        return self._receiver.receive()
 
 class _ReceiverOpen(_Operation):
     def __init__(self, container, connection, address):
