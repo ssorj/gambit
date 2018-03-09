@@ -29,8 +29,7 @@ def send_one(host, port):
     with Container("send") as cont:
         conn = cont.connect(host, port)
         sender = conn.open_sender("examples")
-        tracker = sender.send(message)
-        tracker.wait_for_update()
+        sender.send(message)
 
         cont.log("Sent message {}", message)
 

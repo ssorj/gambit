@@ -68,7 +68,7 @@ class Container(object):
     def connect(self, host, port):
         self.log("Connecting to {}:{}", host, port)
 
-        op = _ConnectOperation(self, host, port)
+        op = _ConnectionOpen(self, host, port)
         op.enqueue()
         op.wait_for_start()
 
@@ -97,7 +97,7 @@ class _Endpoint(_Object):
         super(_Endpoint, self).__init__(container, proton_object)
 
         self._open_operation = open_operation
-        self._close_operation = _CloseEndpointOperation(self.container, self)
+        self._close_operation = _EndpointClose(self.container, self)
 
     def __enter__(self):
         return self
@@ -116,14 +116,14 @@ class _Endpoint(_Object):
 
 class Connection(_Endpoint):
     def open_sender(self, address=None):
-        op = _OpenSenderOperation(self, address)
+        op = _SenderOpen(self.container, self, address)
         op.enqueue()
         op.wait_for_start()
 
         return op.gambit_object
 
     def open_receiver(self, address=None):
-        op = _OpenReceiverOperation(self, address)
+        op = _ReceiverOpen(self.container, self, address)
         op.enqueue()
         op.wait_for_start()
 
@@ -131,7 +131,7 @@ class Connection(_Endpoint):
 
 class Sender(_Endpoint):
     def send(self, message, completion_fn=None):
-        op = _SendOperation(self.container, self, message, completion_fn)
+        op = _MessageSend(self.container, self, message, completion_fn)
         op.enqueue()
         op.wait_for_start()
 
@@ -270,27 +270,27 @@ class _Handler(_handlers.MessagingHandler):
         self.pending_operations[(op.__class__, op.proton_object)] = op
 
     def on_connection_opened(self, event):
-        op = self.pending_operations.pop((_ConnectOperation, event.connection))
+        op = self.pending_operations.pop((_ConnectionOpen, event.connection))
         op.complete()
 
     def on_connection_closed(self, event):
-        op = self.pending_operations.pop((_CloseEndpointOperation, event.connection))
+        op = self.pending_operations.pop((_EndpointClose, event.connection))
         op.complete()
 
     def on_link_opened(self, event):
         if event.link.is_sender:
-            op = self.pending_operations.pop((_OpenSenderOperation, event.link))
+            op = self.pending_operations.pop((_SenderOpen, event.link))
         else:
-            op = self.pending_operations.pop((_OpenReceiverOperation, event.link))
+            op = self.pending_operations.pop((_ReceiverOpen, event.link))
 
         op.complete()
 
     def on_link_closed(self, event):
-        op = self.pending_operations.pop((_CloseEndpointOperation, event.link))
+        op = self.pending_operations.pop((_EndpointClose, event.link))
         op.complete()
 
     def on_acknowledged(self, event):
-        op = self.pending_operations.pop((_SendOperation, event.delivery))
+        op = self.pending_operations.pop((_MessageSend, event.delivery))
         op.complete()
 
     def on_accepted(self, event):
@@ -361,9 +361,9 @@ class _Operation(object):
         while not self.completed.wait(1):
             pass
 
-class _CloseEndpointOperation(_Operation):
+class _EndpointClose(_Operation):
     def __init__(self, container, endpoint):
-        super(_CloseEndpointOperation, self).__init__(container)
+        super(_EndpointClose, self).__init__(container)
 
         self.endpoint = endpoint
 
@@ -373,68 +373,68 @@ class _CloseEndpointOperation(_Operation):
         self.proton_object = self.endpoint._proton_object
         self.gambit_object = self.endpoint
 
-class _ConnectOperation(_Operation):
+class _ConnectionOpen(_Operation):
     def __init__(self, container, host, port):
-        super(_ConnectOperation, self).__init__(container)
+        super(_ConnectionOpen, self).__init__(container)
 
         self.host = host
         self.port = port
 
     def on_start(self):
-        pn_cont = self.container._proton_object
-        conn_url = "amqp://{}:{}".format(self.host, self.port)
+        pn_container = self.container._proton_object
+        connection_url = "amqp://{}:{}".format(self.host, self.port)
 
-        self.proton_object = pn_cont.connect(conn_url, allowed_mechs=b"ANONYMOUS")
+        self.proton_object = pn_container.connect(connection_url, allowed_mechs=b"ANONYMOUS")
         self.gambit_object = Connection(self.container, self.proton_object, self)
 
-class _OpenSenderOperation(_Operation):
-    def __init__(self, connection, address):
-        super(_OpenSenderOperation, self).__init__(connection.container)
+class _SenderOpen(_Operation):
+    def __init__(self, container, connection, address):
+        super(_SenderOpen, self).__init__(container)
 
         self.connection = connection
         self.address = address
 
     def on_start(self):
-        pn_cont = self.container._proton_object
-        pn_conn = self.connection._proton_object
+        pn_container = self.container._proton_object
+        pn_connection = self.connection._proton_object
 
-        self.proton_object = pn_cont.create_sender(pn_conn, self.address)
+        self.proton_object = pn_container.create_sender(pn_connection, self.address)
         self.gambit_object = Sender(self.container, self.proton_object, self)
 
-class _OpenReceiverOperation(_Operation):
-    def __init__(self, connection, address):
-        super(_OpenReceiverOperation, self).__init__(connection.container)
+class _ReceiverOpen(_Operation):
+    def __init__(self, container, connection, address):
+        super(_ReceiverOpen, self).__init__(container)
 
         self.connection = connection
         self.address = address
 
     def on_start(self):
-        pn_cont = self.container._proton_object
-        pn_conn = self.connection._proton_object
-
+        pn_container = self.container._proton_object
+        pn_connection = self.connection._proton_object
         dynamic = False
 
         if self.address is None:
             dynamic = True
 
-        self.proton_object = pn_cont.create_receiver(pn_conn, self.address, dynamic=dynamic)
+        self.proton_object = pn_container.create_receiver(pn_connection, self.address,
+                                                          dynamic=dynamic)
         self.gambit_object = Receiver(self.container, self.proton_object, self)
 
-class _SendOperation(_Operation):
+class _MessageSend(_Operation):
     def __init__(self, container, sender, message, completion_fn):
-        super(_SendOperation, self).__init__(container)
+        super(_MessageSend, self).__init__(container)
 
         self.sender = sender
         self.message = message
         self.completion_fn = completion_fn
 
     def on_start(self):
-        pn_snd = self.sender._proton_object
-        pn_msg = self.message._proton_object
+        pn_sender = self.sender._proton_object
+        pn_message = self.message._proton_object
 
         # XXX Need to block on credit
 
-        self.proton_object = pn_snd.send(pn_msg)
+        self.proton_object = pn_sender.send(pn_message)
         self.gambit_object = Tracker(self.container, self.proton_object, self)
 
     def on_completion(self):
