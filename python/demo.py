@@ -65,6 +65,8 @@ def receive_thrice(host, port):
             cont.log("Received {}", delivery.message)
 
 def send_indefinitely(host, port):
+    message = Message()
+
     with Container("send") as cont:
         conn = cont.connect(host, port)
         sender = conn.open_sender("examples")
@@ -73,8 +75,9 @@ def send_indefinitely(host, port):
             cont.log("Sent {} ({})", tracker.message, tracker.state)
 
         for i in range(0xffff):
-            message = Message("message-{}".format(i))
+            message.body = "message-{}".format(i)
             sender.send(message, completion_fn=completion_fn)
+
             time.sleep(0.2)
 
 def receive_indefinitely(host, port):
