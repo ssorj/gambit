@@ -209,6 +209,12 @@ class _Connection(_Endpoint):
 
         return op.gambit_object
 
+    def send(self, message):
+        assert message.to is not None
+
+        sender = self.open_sender()
+        sender.send(message)
+
 class _ConnectionOpen(_Operation):
     def __init__(self, container, host, port):
         super(_ConnectionOpen, self).__init__(container)

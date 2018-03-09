@@ -93,8 +93,8 @@ def request_one(host, port):
 
         request = Message("abc")
         request.reply_to = receiver.source.address
-
         sender.send(request)
+
         delivery = receiver.receive()
 
         cont.log("Sent {} and received {}", request, delivery.message)
@@ -103,16 +103,12 @@ def respond_one(host, port):
     with Container("respond") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("requests")
-        sender = conn.open_sender() # XXX Connection level send
 
         delivery = receiver.receive()
 
         response = Message(delivery.message.body.upper())
         response.to = delivery.message.reply_to
-
-        sender.send(response)
-
-        # XXX Awkward - I want a blocking send sometimes
+        conn.send(response)
 
         cont.log("Processed {} and sent {}", delivery.message, response)
 
