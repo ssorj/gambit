@@ -96,7 +96,7 @@ class _Endpoint(_Object):
         super(_Endpoint, self).__init__(container, proton_object)
 
         self._open_operation = open_operation
-        self._close_operation = 
+        self._close_operation = None
 
     def __enter__(self):
         return self
@@ -117,14 +117,12 @@ class _Endpoint(_Object):
 class Connection(_Endpoint):
     def open_sender(self, address=None):
         op = _SenderOpen(self.container, self, address)
-        op.enqueue()
         op.wait_for_start()
 
         return op.gambit_object
 
     def open_receiver(self, address=None):
         op = _ReceiverOpen(self.container, self, address)
-        op.enqueue()
         op.wait_for_start()
 
         return op.gambit_object
@@ -132,7 +130,6 @@ class Connection(_Endpoint):
 class Sender(_Endpoint):
     def send(self, message, completion_fn=None):
         op = _MessageSend(self.container, self, message, completion_fn)
-        op.enqueue()
         op.wait_for_start()
 
         return op.gambit_object
@@ -151,7 +148,7 @@ class Receiver(_Endpoint):
 
         pn_delivery, pn_message = self._queue.get()
 
-        return Delivery(pn_delivery, Message(_proton_object=pn_message))
+        return Delivery(self.container, pn_delivery, Message(_proton_object=pn_message))
 
     def next(self):
         return self.receive()
@@ -184,13 +181,11 @@ class Tracker(_Object):
     def wait_for_update(self):
         return self._send_operation.wait_for_completion()
 
-class Delivery(object):
-    def __init__(self, proton_object, message):
-        self._proton_object = proton_object
-        self.message = message
+class Delivery(_Object):
+    def __init__(self, container, proton_object, message):
+        super(Delivery, self).__init__(container, proton_object)
 
-    def __repr__(self):
-        return "{}({}, {})".format(self.__class__.__name__, self._proton_object, self.message)
+        self.message = message
 
 class Message(object):
     def __init__(self, body=None, _proton_object=None):
@@ -318,16 +313,11 @@ class _Operation(object):
         self.started = _threading.Event()
         self.completed = _threading.Event()
 
-        self._enqueue(self)
+        self.container._operations.put(self)
+        self.container._event_injector.trigger(_reactor.ApplicationEvent("operation"))
 
     def __repr__(self):
         return self.__class__.__name__
-
-    def _enqueue(self):
-        self.container.log("Enqueueing {}", self)
-
-        self.container._operations.put(self)
-        self.container._event_injector.trigger(_reactor.ApplicationEvent("operation"))
 
     def start(self):
         self.container.log("Starting {}", self)
