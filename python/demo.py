@@ -31,7 +31,7 @@ def send_once(host, port):
         sender = conn.open_sender("examples")
         sender.send(message)
 
-        cont.log("Sent message {}", message)
+        cont._log("Sent message {}", message)
 
 def receive_once(host, port):
     with Container("receive") as cont:
@@ -39,7 +39,7 @@ def receive_once(host, port):
         receiver = conn.open_receiver("examples")
         delivery = receiver.receive()
 
-        cont.log("Received message {}", delivery.message)
+        cont._log("Received message {}", delivery.message)
 
 def send_thrice(host, port):
     messages = [Message("hello-{}".format(x)) for x in range(3)]
@@ -53,7 +53,7 @@ def send_thrice(host, port):
             sender.send(message, lambda x: trackers.append(x))
 
         for tracker in trackers:
-            cont.log("Sent {} ({})", tracker.message, tracker.state)
+            cont._log("Sent {} ({})", tracker.message, tracker.state)
 
 def receive_thrice(host, port):
     with Container("receive") as cont:
@@ -62,7 +62,7 @@ def receive_thrice(host, port):
 
         for i in range(3):
             delivery = receiver.receive()
-            cont.log("Received {}", delivery.message)
+            cont._log("Received {}", delivery.message)
 
 def send_indefinitely(host, port):
     message = Message()
@@ -72,13 +72,13 @@ def send_indefinitely(host, port):
         sender = conn.open_sender("examples")
 
         def completion_fn(tracker):
-            cont.log("Sent {} ({})", tracker.message, tracker.state)
+            cont._log("Sent {} ({})", tracker.message, tracker.state)
 
         for i in range(0xffff):
             message.body = "message-{}".format(i)
             sender.send(message, completion_fn=completion_fn)
 
-            time.sleep(0.2)
+            time.sleep(0.1)
 
 def receive_indefinitely(host, port):
     with Container("receive") as cont:
@@ -86,7 +86,7 @@ def receive_indefinitely(host, port):
         receiver = conn.open_receiver("examples")
 
         for delivery in receiver:
-            cont.log("Received {}", delivery.message)
+            cont._log("Received {}", delivery.message)
 
 def request_once(host, port):
     with Container("request") as cont:
@@ -101,7 +101,7 @@ def request_once(host, port):
 
         delivery = receiver.receive()
 
-        cont.log("Sent {} and received {}", request, delivery.message)
+        cont._log("Sent {} and received {}", request, delivery.message)
 
 def respond_once(host, port):
     with Container("respond") as cont:
@@ -115,7 +115,7 @@ def respond_once(host, port):
 
         conn.send(response)
 
-        cont.log("Processed {} and sent {}", delivery.message, response)
+        cont._log("Processed {} and sent {}", delivery.message, response)
 
 def main():
     try:
@@ -153,7 +153,7 @@ def main():
     receive_thread.daemon = True
     receive_thread.start()
 
-    time.sleep(1)
+    time.sleep(0.3)
 
 if __name__ == "__main__":
     try:

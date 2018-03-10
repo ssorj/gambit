@@ -22,3 +22,12 @@ export PYTHONPATH := ${PWD}/python:${PYTHONPATH}
 .PHONY: demo
 demo:
 	scripts/run-demo
+
+.PHONY: docs
+docs:
+	mkdir -p build
+	sphinx-build -M html docs build/docs
+
+.PHONY: clean
+clean:
+	rm -rf build
