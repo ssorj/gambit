@@ -88,29 +88,31 @@ def receive_batch(host, port):
             delivery = receiver.receive()
             print("Received {}".format(delivery.message))
 
-def send_indefinitely(host, port):
+def send_indefinitely(host, port, stopping):
     message = Message()
+
+    def completion_fn(tracker):
+        print("Sent {} ({})".format(tracker.message, tracker.state))
 
     with Container("send") as cont:
         conn = cont.connect(host, port)
         sender = conn.open_sender("examples")
 
-        def completion_fn(tracker):
-            print("Sent {} ({})".format(tracker.message, tracker.state))
-
-        for i in range(0xffff):
+        for i in xrange(sys.maxint):
             message.body = "message-{}".format(i)
             sender.send(message, completion_fn=completion_fn)
 
-            time.sleep(0.1)
+            if stopping.is_set(): break
 
-def receive_indefinitely(host, port):
+def receive_indefinitely(host, port, stopping):
     with Container("receive") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("examples")
 
         for delivery in receiver:
             print("Received {}".format(delivery.message))
+
+            if stopping.is_set(): break
 
 def request_once(host, port):
     with Container("request") as cont:
@@ -164,7 +166,22 @@ def main():
     send_batch(host, port)
     receive_batch(host, port)
 
-    # Request once and respond once
+    # Send and receive indefinitely
+
+    stopping = threading.Event()
+
+    send_thread = threading.Thread(target=send_indefinitely, args=(host, port, stopping))
+    send_thread.daemon = True
+    send_thread.start()
+
+    receive_thread = threading.Thread(target=receive_indefinitely, args=(host, port, stopping))
+    receive_thread.daemon = True
+    receive_thread.start()
+
+    time.sleep(0.02)
+    stopping.set()
+
+    # Request and respond once
 
     respond_thread = threading.Thread(target=respond_once, args=(host, port))
     respond_thread.start()
@@ -172,18 +189,6 @@ def main():
     request_once(host, port)
 
     respond_thread.join()
-
-    # Send and receive indefinitely
-
-    send_thread = threading.Thread(target=send_indefinitely, args=(host, port))
-    send_thread.daemon = True
-    send_thread.start()
-
-    receive_thread = threading.Thread(target=receive_indefinitely, args=(host, port))
-    receive_thread.daemon = True
-    receive_thread.start()
-
-    time.sleep(0.3)
 
 if __name__ == "__main__":
     try:
