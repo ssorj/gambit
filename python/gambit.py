@@ -29,6 +29,8 @@ import proton.reactor as _reactor
 
 _log_mutex = _threading.Lock()
 
+IMMEDIATE = 0
+
 class Container(object):
     def __init__(self, id=None):
         self._proton_object = _reactor.Container(_Handler(self))
@@ -84,7 +86,7 @@ class Container(object):
     def connect(self, host, port, **options):
         """
         Initiate connection open.
-        Use `connection.await_open()` to block until the remote peer confirms the open.
+        Use :meth:`Connection.await_open()` to block until the remote peer confirms the open.
 
         :rtype: Connection
         """
@@ -203,7 +205,7 @@ class _Endpoint(_Object):
     def close(self, error=None):
         """
         Initiate close.
-        Use `await_close()` to block until the remote peer confirms the close.
+        Use :meth:`await_close()` to block until the remote peer confirms the close.
         """
 
         assert self._close_operation is None
@@ -245,7 +247,7 @@ class Connection(_Endpoint):
     def open_sender(self, address, **options):
         """
         Initiate sender open.
-        Use `sender.await_open()` to block until the remote peer confirms the open.
+        Use :meth:`Sender.await_open()` to block until the remote peer confirms the open.
 
         :rtype: Sender
         """
@@ -260,7 +262,7 @@ class Connection(_Endpoint):
     def open_receiver(self, address, **options):
         """
         Initiate receiver open.
-        Use `receiver.await_open()` to block until the remote peer confirms the open.
+        See :meth:`open_receiver()`.
 
         :rtype: Receiver
         """
@@ -275,7 +277,7 @@ class Connection(_Endpoint):
     def open_anonymous_sender(self, **options):
         """
         Initiate open of an unnamed sender.
-        Use `sender.await_open()` to block until the remote peer confirms the open.
+        See :meth:`open_sender()`.
 
         :rtype: Sender
         """
@@ -303,14 +305,10 @@ class Connection(_Endpoint):
     def send(self, message, completion_fn=None, timeout=None):
         """
         Send a message using an anonymous sender.
+        See :meth:`Sender.send()`.
+
         The supplied message must have a non-empty `to` address.
-
-        Blocks until credit is available and the message can be sent.
-        Use `await_ack()` to block until the remote peer acknowledges the delivery.
-
-        If set, `completion_fn(delivery)` is called after the delivery is acknowledged.
         """
-        # XXX Use copydoc
 
         assert message.to is not None
 
@@ -318,11 +316,11 @@ class Connection(_Endpoint):
 
     def await_ack(self, timeout=None):
         """
-        Block until the remote peer acknowledges the most recent send.
+        Block until the remote peer acknowledges the most recent :meth:`send()`.
+        See :meth:`Sender.await_ack()`.
 
         :rtype: Tracker
         """
-        # XXX Use copydoc
 
         return self._get_anonymous_sender().await_ack()
 
@@ -376,9 +374,9 @@ class Sender(_Endpoint):
         Send a message.
 
         Blocks until credit is available and the message can be sent.
-        Use `await_ack()` to block until the remote peer acknowledges the delivery.
+        Use :meth:`await_ack()` to block until the remote peer acknowledges the delivery.
 
-        If set, `completion_fn(delivery)` is called after the delivery is acknowledged.
+        If set, `completion_fn(tracker)` is called after the delivery is acknowledged.
         """
 
         self._message_sent.clear()
@@ -394,7 +392,8 @@ class Sender(_Endpoint):
 
     def await_ack(self, timeout=None):
         """
-        Block until the remote peer acknowledges the most recent send.
+        Block until the remote peer acknowledges the most recent :meth:`send()`.
+        Returns the tracker for the completed delivery.
 
         :rtype: Tracker
         """

@@ -4,9 +4,17 @@ Gambit
 Blocking operations take optional timeout arguments.  If the timeout
 is exceeded, they raise a timeout error.
 
+.. module:: gambit
+
+.. data:: IMMEDIATE
+
+   A special timeout value that requests a null return if the desired
+   result is unavailable at the time of the call.
+
+   CONSIDER: sender.sendable() and receiver.receivable() instead
+
 .. autoclass:: gambit.Container
 .. autoclass:: gambit.Connection
-   :exclude-members: __init__
 .. autoclass:: gambit.Sender
 .. autoclass:: gambit.Receiver
 .. autoclass:: gambit.Tracker
