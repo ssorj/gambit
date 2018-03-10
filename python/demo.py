@@ -62,6 +62,7 @@ def receive_once_with_explicit_acks(host, port):
 
         delivery = receiver.receive()
         delivery.accept()
+        # In principle: delivery.await_settlement()
 
         print("Received {}".format(delivery.message))
 

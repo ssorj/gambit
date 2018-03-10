@@ -209,7 +209,7 @@ class _Endpoint(_Object):
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
-    def close(self, error=None):
+    def close(self, error_condition=None):
         """
         Initiate close.
         Use :meth:`await_close()` to block until the remote peer confirms the close.
@@ -387,7 +387,7 @@ class Sender(_Endpoint):
         Send a message.
 
         Blocks until credit is available and the message can be sent.
-        Use :meth:`await_ack()` to block until the remote peer acknowledges the delivery.
+        Use :meth:`await_ack()` to block until the remote peer acknowledges the message.
 
         If set, `completion_fn(tracker)` is called after the delivery is acknowledged.
         """
