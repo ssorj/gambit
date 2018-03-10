@@ -241,7 +241,7 @@ class Connection(_Endpoint):
         super(Connection, self).__init__(container, proton_object, open_operation)
 
         self._anonymous_sender = None
-        
+
     def open_sender(self, address, **options):
         """
         Initiate sender open.
@@ -311,7 +311,7 @@ class Connection(_Endpoint):
         If set, `completion_fn(delivery)` is called after the delivery is acknowledged.
         """
         # XXX Use copydoc
-        
+
         assert message.to is not None
 
         self._get_anonymous_sender().send(message, completion_fn)
@@ -323,7 +323,7 @@ class Connection(_Endpoint):
         :rtype: Tracker
         """
         # XXX Use copydoc
-        
+
         return self._get_anonymous_sender().await_ack()
 
     def _get_anonymous_sender(self):
@@ -331,7 +331,7 @@ class Connection(_Endpoint):
             self._anonymous_sender = self.open_anonymous_sender()
 
         return self._anonymous_sender
-        
+
 class _ConnectionOpen(_Operation):
     def __init__(self, container, host, port):
         super(_ConnectionOpen, self).__init__(container)
@@ -357,7 +357,9 @@ class Sender(_Endpoint):
 
         self._message_queue = _queue.Queue()
         self._tracker_queue = _queue.Queue(1)
+
         self._message_sent = _threading.Event()
+        self._message_acked = _threading.Event()
 
         self.container._senders_by_proton_object[self._proton_object] = self
 
@@ -379,6 +381,9 @@ class Sender(_Endpoint):
         If set, `completion_fn(delivery)` is called after the delivery is acknowledged.
         """
 
+        self._message_sent.clear()
+        self._message_acked.clear()
+
         self._message_queue.put((message, completion_fn))
 
         event = _reactor.ApplicationEvent("message_enqueued", subject=self._proton_object)
@@ -387,14 +392,15 @@ class Sender(_Endpoint):
         while not self._message_sent.wait(1):
             pass
 
-        self._message_sent.clear()
-
     def await_ack(self, timeout=None):
         """
         Block until the remote peer acknowledges the most recent send.
 
         :rtype: Tracker
         """
+
+        while not self._message_acked.wait(1):
+            pass
 
         return self._tracker_queue.get()
 
@@ -616,6 +622,7 @@ class _Handler(_handlers.MessagingHandler):
     def on_acknowledged(self, event):
         gb_sender = self.container._senders_by_proton_object[event.delivery.link]
         queue = gb_sender._tracker_queue
+        acked = gb_sender._message_acked
 
         message, completion_fn = self.pending_deliveries.pop(event.delivery)
         tracker = Tracker(self.container, event.delivery, message)
@@ -627,6 +634,8 @@ class _Handler(_handlers.MessagingHandler):
                 pass
 
             queue._put(tracker)
+
+        acked.set()
 
         if completion_fn is not None:
             completion_fn(tracker)
