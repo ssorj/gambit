@@ -6,6 +6,7 @@ is exceeded, they raise a timeout error.
 
 .. autoclass:: gambit.Container
 .. autoclass:: gambit.Connection
+   :exclude-members: __init__
 .. autoclass:: gambit.Sender
 .. autoclass:: gambit.Receiver
 .. autoclass:: gambit.Tracker

@@ -29,19 +29,43 @@ def send_once(host, port):
     with Container("send") as cont:
         conn = cont.connect(host, port)
         sender = conn.open_sender("examples")
+
         sender.send(message)
 
-        cont._log("Sent message {}", message)
+        print("Sent {}".format(message))
 
 def receive_once(host, port):
     with Container("receive") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("examples")
+
         delivery = receiver.receive()
 
-        cont._log("Received message {}", delivery.message)
+        print("Received {}".format(delivery.message))
 
-def send_thrice(host, port):
+def send_once_synchronously(host, port):
+    message = Message("hello")
+
+    with Container("send") as cont:
+        conn = cont.connect(host, port)
+        sender = conn.open_sender("examples")
+
+        sender.send(message)
+        tracker = sender.await_ack()
+
+        print("Sent {} ({})".format(tracker.message, tracker.state))
+
+def receive_once_with_explicit_acks(host, port):
+    with Container("receive") as cont:
+        conn = cont.connect(host, port)
+        receiver = conn.open_receiver("examples", auto_accept=False)
+
+        delivery = receiver.receive()
+        delivery.accept()
+
+        print("Received {}".format(delivery.message))
+
+def send_batch(host, port):
     messages = [Message("hello-{}".format(x)) for x in range(3)]
     trackers = list()
 
@@ -53,16 +77,16 @@ def send_thrice(host, port):
             sender.send(message, lambda x: trackers.append(x))
 
         for tracker in trackers:
-            cont._log("Sent {} ({})", tracker.message, tracker.state)
+            print("Sent {} ({})".format(tracker.message, tracker.state))
 
-def receive_thrice(host, port):
+def receive_batch(host, port):
     with Container("receive") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("examples")
 
         for i in range(3):
             delivery = receiver.receive()
-            cont._log("Received {}", delivery.message)
+            print("Received {}".format(delivery.message))
 
 def send_indefinitely(host, port):
     message = Message()
@@ -72,7 +96,7 @@ def send_indefinitely(host, port):
         sender = conn.open_sender("examples")
 
         def completion_fn(tracker):
-            cont._log("Sent {} ({})", tracker.message, tracker.state)
+            print("Sent {} ({})".format(tracker.message, tracker.state))
 
         for i in range(0xffff):
             message.body = "message-{}".format(i)
@@ -86,7 +110,7 @@ def receive_indefinitely(host, port):
         receiver = conn.open_receiver("examples")
 
         for delivery in receiver:
-            cont._log("Received {}", delivery.message)
+            print("Received {}".format(delivery.message))
 
 def request_once(host, port):
     with Container("request") as cont:
@@ -101,7 +125,7 @@ def request_once(host, port):
 
         delivery = receiver.receive()
 
-        cont._log("Sent {} and received {}", request, delivery.message)
+        print("Sent {} and received {}".format(request, delivery.message))
 
 def respond_once(host, port):
     with Container("respond") as cont:
@@ -115,7 +139,7 @@ def respond_once(host, port):
 
         conn.send(response)
 
-        cont._log("Processed {} and sent {}", delivery.message, response)
+        print("Processed {} and sent {}".format(delivery.message, response))
 
 def main():
     try:
@@ -129,10 +153,15 @@ def main():
     send_once(host, port)
     receive_once(host, port)
 
-    # Send and receive three times
+    # Send and receive once with a few more behaviors
 
-    send_thrice(host, port)
-    receive_thrice(host, port)
+    send_once_synchronously(host, port)
+    receive_once_with_explicit_acks(host, port)
+
+    # Send and receive a batch of three
+
+    send_batch(host, port)
+    receive_batch(host, port)
 
     # Request once and respond once
 

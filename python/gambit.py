@@ -83,7 +83,8 @@ class Container(object):
 
     def connect(self, host, port, **options):
         """
-        Initiate connection open.  Use `connection.await_open()` to block until completion.
+        Initiate connection open.
+        Use `connection.await_open()` to block until the remote peer confirms the open.
 
         :rtype: Connection
         """
@@ -201,7 +202,8 @@ class _Endpoint(_Object):
 
     def close(self, error=None):
         """
-        Initiate close.  Use `await_close()` to block until completion.
+        Initiate close.
+        Use `await_close()` to block until the remote peer confirms the close.
         """
 
         assert self._close_operation is None
@@ -235,9 +237,15 @@ class _EndpointClose(_Operation):
         self.gambit_object = self.endpoint
 
 class Connection(_Endpoint):
+    def __init__(self, container, proton_object, open_operation):
+        super(Connection, self).__init__(container, proton_object, open_operation)
+
+        self._anonymous_sender = None
+        
     def open_sender(self, address, **options):
         """
-        Initiate sender open.  Use `sender.await_open()` to block until completion.
+        Initiate sender open.
+        Use `sender.await_open()` to block until the remote peer confirms the open.
 
         :rtype: Sender
         """
@@ -251,7 +259,8 @@ class Connection(_Endpoint):
 
     def open_receiver(self, address, **options):
         """
-        Initiate receiver open.  Use `receiver.await_open()` to block until completion.
+        Initiate receiver open.
+        Use `receiver.await_open()` to block until the remote peer confirms the open.
 
         :rtype: Receiver
         """
@@ -265,7 +274,8 @@ class Connection(_Endpoint):
 
     def open_anonymous_sender(self, **options):
         """
-        Initiate open of an unnamed sender.  Use `sender.await_open()` to block until completion.
+        Initiate open of an unnamed sender.
+        Use `sender.await_open()` to block until the remote peer confirms the open.
 
         :rtype: Sender
         """
@@ -277,7 +287,10 @@ class Connection(_Endpoint):
 
     def open_dynamic_receiver(self, **options):
         """
-        Blocks until the remote peer supplies a source address.
+        Open a sender with a dynamic source address supplied by the remote peer.
+        Blocks until the remote peer confirms the open, providing a source address.
+
+        Note: There is no need to call `receiver.await_open()` for this operation.
 
         :rtype: Receiver
         """
@@ -291,14 +304,34 @@ class Connection(_Endpoint):
         """
         Send a message using an anonymous sender.
         The supplied message must have a non-empty `to` address.
-        Blocks until message credit is available.
-        """
 
+        Blocks until credit is available and the message can be sent.
+        Use `await_ack()` to block until the remote peer acknowledges the delivery.
+
+        If set, `completion_fn(delivery)` is called after the delivery is acknowledged.
+        """
+        # XXX Use copydoc
+        
         assert message.to is not None
 
-        sender = self.open_anonymous_sender()
-        sender.send(message, completion_fn)
+        self._get_anonymous_sender().send(message, completion_fn)
 
+    def await_ack(self, timeout=None):
+        """
+        Block until the remote peer acknowledges the most recent send.
+
+        :rtype: Tracker
+        """
+        # XXX Use copydoc
+        
+        return self._get_anonymous_sender().await_ack()
+
+    def _get_anonymous_sender(self):
+        if self._anonymous_sender is None:
+            self._anonymous_sender = self.open_anonymous_sender()
+
+        return self._anonymous_sender
+        
 class _ConnectionOpen(_Operation):
     def __init__(self, container, host, port):
         super(_ConnectionOpen, self).__init__(container)
@@ -323,6 +356,7 @@ class Sender(_Endpoint):
         self._target = Target(self.container, self._proton_object.remote_target)
 
         self._message_queue = _queue.Queue()
+        self._tracker_queue = _queue.Queue(1)
         self._message_sent = _threading.Event()
 
         self.container._senders_by_proton_object[self._proton_object] = self
@@ -337,7 +371,11 @@ class Sender(_Endpoint):
 
     def send(self, message, completion_fn=None, timeout=None):
         """
-        Send a message.  Blocks until message credit is available.
+        Send a message.
+
+        Blocks until credit is available and the message can be sent.
+        Use `await_ack()` to block until the remote peer acknowledges the delivery.
+
         If set, `completion_fn(delivery)` is called after the delivery is acknowledged.
         """
 
@@ -350,6 +388,15 @@ class Sender(_Endpoint):
             pass
 
         self._message_sent.clear()
+
+    def await_ack(self, timeout=None):
+        """
+        Block until the remote peer acknowledges the most recent send.
+
+        :rtype: Tracker
+        """
+
+        return self._tracker_queue.get()
 
 class _SenderOpen(_Operation):
     def __init__(self, container, connection, address):
@@ -567,10 +614,21 @@ class _Handler(_handlers.MessagingHandler):
         op.complete()
 
     def on_acknowledged(self, event):
+        gb_sender = self.container._senders_by_proton_object[event.delivery.link]
+        queue = gb_sender._tracker_queue
+
         message, completion_fn = self.pending_deliveries.pop(event.delivery)
+        tracker = Tracker(self.container, event.delivery, message)
+
+        with queue.mutex:
+            try:
+                queue._get()
+            except IndexError:
+                pass
+
+            queue._put(tracker)
 
         if completion_fn is not None:
-            tracker = Tracker(self.container, event.delivery, message)
             completion_fn(tracker)
 
     def on_accepted(self, event):
