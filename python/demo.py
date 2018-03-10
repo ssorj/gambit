@@ -138,6 +138,7 @@ def respond_once(host, port):
         response.to = delivery.message.reply_to
 
         conn.send(response)
+        conn.await_ack()
 
         print("Processed {} and sent {}".format(delivery.message, response))
 
