@@ -15,3 +15,7 @@ release = u""
 
 pygments_style = "sphinx"
 html_theme = "nature"
+
+html_theme_options = {
+    "nosidebar": True,
+}

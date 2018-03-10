@@ -28,6 +28,10 @@ docs:
 	mkdir -p build
 	sphinx-build -M html docs build/docs
 
+.PHONY: publish
+publish: docs
+	rsync -av build/docs/html/ file.rdu.redhat.com:public_html/gambit
+
 .PHONY: clean
 clean:
 	rm -rf build
