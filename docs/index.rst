@@ -13,6 +13,9 @@ is exceeded, they raise a timeout error.
 
    CONSIDER: sender.sendable() and receiver.receivable() instead
 
+.. autoexception:: TimeoutError
+   :exclude-members: args, message
+   
 .. autoclass:: gambit.Container
 .. autoclass:: gambit.Connection
 .. autoclass:: gambit.Sender

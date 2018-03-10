@@ -31,6 +31,13 @@ _log_mutex = _threading.Lock()
 
 IMMEDIATE = 0
 
+class TimeoutError(Exception):
+    """
+    Raised if the requested timeout of a blocking operation is exceeded.
+    """
+    
+    pass
+
 class Container(object):
     def __init__(self, id=None):
         self._proton_object = _reactor.Container(_Handler(self))
