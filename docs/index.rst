@@ -18,6 +18,7 @@ is exceeded, they raise a timeout error.
    
 .. autoclass:: gambit.Container
 .. autoclass:: gambit.Connection
+.. autoclass:: gambit.Session
 .. autoclass:: gambit.Sender
 .. autoclass:: gambit.Receiver
 .. autoclass:: gambit.Tracker

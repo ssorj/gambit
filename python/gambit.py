@@ -35,7 +35,7 @@ class TimeoutError(Exception):
     """
     Raised if the requested timeout of a blocking operation is exceeded.
     """
-    
+
     pass
 
 class Container(object):
@@ -250,6 +250,12 @@ class Connection(_Endpoint):
         super(Connection, self).__init__(container, proton_object, open_operation)
 
         self._anonymous_sender = None
+
+    @property
+    def default_session(self):
+        """
+        The default session
+        """
 
     def open_sender(self, address, **options):
         """
