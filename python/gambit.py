@@ -221,7 +221,6 @@ class _EndpointClose(_Operation):
 
     def init(self):
         self.endpoint._proton_object.close()
-
         self.proton_object = self.endpoint._proton_object
 
 class Connection(_Endpoint):
@@ -293,6 +292,8 @@ class Connection(_Endpoint):
         See :meth:`Sender.send()`.
 
         The supplied message must have a non-empty `to` address.
+
+        :rtype: Tracker
         """
 
         assert message.to is not None
@@ -733,5 +734,7 @@ class _ReturnPort(object):
 
             value = self.value
             self.value = None
+
             self.empty.notify()
+
             return value
