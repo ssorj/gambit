@@ -479,6 +479,8 @@ class Receiver(_Link):
         """
         Receive a delivery containing a message.  Blocks until a message is available.
 
+        CONSIDER: Flow one credit if credit is zero for a more convenient no-prefetch mode.
+
         :rtype: Delivery
         """
 

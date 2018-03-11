@@ -23,8 +23,7 @@ it does not wait until the message is acknowledged.  Use
 `await_delivery()` to do so.
 
 Receiver `receive()` blocks until a message is available to return.
-No further blocking is usually required (CONSIDER: unless we introduce
-exactly-once delivery).
+No further blocking is usually required.
 
 .. **Thread safety**
 
