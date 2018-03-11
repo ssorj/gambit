@@ -252,13 +252,7 @@ class Connection(_Endpoint):
     def __init__(self, container, proton_object, open_operation):
         super(Connection, self).__init__(container, proton_object, open_operation)
 
-        self._anonymous_sender = None
-
-    @property
-    def default_session(self):
-        """
-        The default session
-        """
+        self._default_sender = None
 
     def open_sender(self, address, **options):
         """
@@ -328,25 +322,34 @@ class Connection(_Endpoint):
 
         assert message.to is not None
 
-        self._get_anonymous_sender().send(message, on_delivery)
+        self.default_sender.send(message, on_delivery)
 
     def await_delivery(self, timeout=None):
         """
         Block until the remote peer acknowledges the most recent :meth:`send()`.
         See :meth:`Sender.await_delivery()`.
 
-        CONSIDER alternate name await_ack()
-
         :rtype: Tracker
         """
 
-        return self._get_anonymous_sender().await_delivery()
+        return self.default_sender.await_delivery()
 
-    def _get_anonymous_sender(self):
-        if self._anonymous_sender is None:
-            self._anonymous_sender = self.open_anonymous_sender()
+    @property
+    def default_session(self):
+        """
+        The default session.
+        """
 
-        return self._anonymous_sender
+    @property
+    def default_sender(self):
+        """
+        The default sender.
+        """
+
+        if self._default_sender is None:
+            self._default_sender = self.open_anonymous_sender()
+
+        return self._default_sender
 
 class _ConnectionOpen(_Operation):
     def __init__(self, container, host, port):
