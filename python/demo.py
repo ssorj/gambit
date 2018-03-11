@@ -50,10 +50,16 @@ def send_once_synchronously(host, port):
         conn = cont.connect(host, port)
         sender = conn.open_sender("examples")
 
-        sender.send(message)
-        tracker = sender.await_delivery()
+        def on_delivery(tracker):
+            print("Sent {} ({})".format(tracker.message, tracker.state))
 
-        print("Sent {} ({})".format(tracker.message, tracker.state))
+        sender.send(message, on_delivery)
+        sender.await_delivery()
+
+        # Talk about threading issues arising from use of on_delivery
+
+        # tracker = sender.send(message)
+        # tracker.await_delivery()
 
 def receive_once_with_explicit_acks(host, port):
     with Container("receive") as cont:

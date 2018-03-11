@@ -272,7 +272,7 @@ class Connection(_Endpoint):
     def open_receiver(self, address, **options):
         """
         Initiate receiver open.
-        See :meth:`open_receiver()`.
+        Use :meth:`Receiver.await_open()` to block until the remote peer confirms the open.
 
         :rtype: Receiver
         """
@@ -328,11 +328,9 @@ class Connection(_Endpoint):
         """
         Block until the remote peer acknowledges the most recent :meth:`send()`.
         See :meth:`Sender.await_delivery()`.
-
-        :rtype: Tracker
         """
 
-        return self.default_sender.await_delivery()
+        self.default_sender.await_delivery()
 
     @property
     def default_session(self):
@@ -445,15 +443,13 @@ class Sender(_Link):
     def await_delivery(self, timeout=None):
         """
         Block until the remote peer acknowledges the most recent :meth:`send()`.
-        Returns the tracker for the completed delivery.
-
-        :rtype: Tracker
         """
 
         while not self._message_delivered.wait(1):
             pass
 
-        return self._tracker_queue.get()
+        # XXX Not in use ATM
+        self._tracker_queue.get()
 
     def send_request(self, message, receiver=None, timeout=None):
         """
@@ -464,7 +460,7 @@ class Sender(_Link):
 
         The `reply_to` address of `message` is set to the source address of the receiver.
 
-        If receiver is none, a receiver is created internally using :meth:`open_dynamic_receiver()`.
+        If `receiver` is none, a receiver is created internally using :meth:`open_dynamic_receiver()`.
 
         :rtype: Receiver
         """
