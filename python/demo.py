@@ -130,6 +130,17 @@ def request_once(host, port):
 
         print("Sent {} and received {}".format(request, delivery.message))
 
+def request_once_using_send_request(host, port):
+    with Container("request") as cont:
+        conn = cont.connect(host, port)
+        sender = conn.open_sender("requests")
+
+        request = Message("abc")
+        receiver = sender.send_request(request)
+        delivery = receiver.receive()
+
+        print("Sent {} and received {}".format(request, delivery.message))
+
 def respond_once(host, port):
     with Container("respond") as cont:
         conn = cont.connect(host, port)
@@ -144,6 +155,37 @@ def respond_once(host, port):
         conn.await_ack()
 
         print("Processed {} and sent {}".format(delivery.message, response))
+
+def request_batch(host, port):
+    requests = [Message("request-{}".format(x)) for x in range(3)]
+
+    with Container("request") as cont:
+        conn = cont.connect(host, port)
+        sender = conn.open_sender("requests")
+        receiver = conn.open_dynamic_receiver()
+
+        for request in requests:
+            sender.send_request(request, receiver=receiver)
+
+        for request in requests:
+            delivery = receiver.receive()
+
+            print("Sent {} and received {}".format(request, delivery.message))
+
+def respond_batch(host, port):
+    with Container("respond") as cont:
+        conn = cont.connect(host, port)
+        receiver = conn.open_receiver("requests")
+
+        for i in range(3):
+            delivery = receiver.receive()
+
+            response = Message(delivery.message.body.upper())
+            response.to = delivery.message.reply_to
+
+            conn.send(response)
+
+            print("Processed {} and sent {}".format(delivery.message, response))
 
 def main():
     try:
@@ -188,6 +230,24 @@ def main():
     respond_thread.start()
 
     request_once(host, port)
+
+    respond_thread.join()
+
+    # Request using send_request and respond once
+
+    respond_thread = threading.Thread(target=respond_once, args=(host, port))
+    respond_thread.start()
+
+    request_once_using_send_request(host, port)
+
+    respond_thread.join()
+
+    # Request and respond in a batch of three
+
+    respond_thread = threading.Thread(target=respond_batch, args=(host, port))
+    respond_thread.start()
+
+    request_batch(host, port)
 
     respond_thread.join()
 

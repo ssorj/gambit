@@ -51,8 +51,9 @@ class Container(object):
         self._event_injector = _reactor.EventInjector()
         self._proton_object.selectable(self._event_injector)
 
-        self._senders_by_proton_object = dict()
-        self._receivers_by_proton_object = dict()
+        # proton object => gambit object
+        self._endpoints = dict()
+
         self._connections = set()
 
     def __enter__(self):
@@ -203,6 +204,8 @@ class _Endpoint(_Object):
         self._open_operation = open_operation
         self._close_operation = None
 
+        self.container._endpoints[self._proton_object] = self
+
     def __enter__(self):
         return self
 
@@ -300,7 +303,7 @@ class Connection(_Endpoint):
 
         return op.gambit_object
 
-    def open_dynamic_receiver(self, **options):
+    def open_dynamic_receiver(self, timeout=None, **options):
         """
         Open a sender with a dynamic source address supplied by the remote peer.
         Blocks until the remote peer confirms the open, providing a source address.
@@ -360,10 +363,19 @@ class _ConnectionOpen(_Operation):
 class Session(_Endpoint):
     pass
 
+# class _SessionOpen(_Operation):
+#     def on_start(self):
+#         pn_container = self.container._proton_object
+#         connection_url = "amqp://{}:{}".format(self.host, self.port)
+
+#         self.proton_object = pn_container.connect(connection_url, allowed_mechs=b"ANONYMOUS")
+#         self.gambit_object = Connection(self.container, self.proton_object, self)
+
 class Sender(_Endpoint):
     def __init__(self, container, proton_object, open_operation):
         super(Sender, self).__init__(container, proton_object, open_operation)
 
+        self._connection = self.container._endpoints[self._proton_object.connection]
         self._target = Target(self.container, self._proton_object.remote_target)
 
         self._message_queue = _queue.Queue()
@@ -372,7 +384,13 @@ class Sender(_Endpoint):
         self._message_sent = _threading.Event()
         self._message_acked = _threading.Event()
 
-        self.container._senders_by_proton_object[self._proton_object] = self
+    @property
+    def connection(self):
+        """
+        The connection containing this sender.
+        """
+
+        return self._connection
 
     @property
     def target(self):
@@ -416,6 +434,29 @@ class Sender(_Endpoint):
 
         return self._tracker_queue.get()
 
+    def send_request(self, message, receiver=None, timeout=None):
+        """
+        CONSIDER
+
+        Send a request message mapped to a receiver for collecting the response.
+        Use :meth:`Receiver.receive()` to get responses.
+
+        The `reply_to` address of `message` is set to the source address of the receiver.
+
+        If receiver is none, a receiver is created internally using :meth:`open_dynamic_receiver()`.
+
+        :rtype: Receiver
+        """
+
+        if receiver is None:
+            receiver = self.connection.open_dynamic_receiver(timeout=timeout)
+
+        message.reply_to = receiver.source.address
+
+        self.send(message, timeout=timeout)
+
+        return receiver
+
 class _SenderOpen(_Operation):
     def __init__(self, container, connection, address):
         super(_SenderOpen, self).__init__(container)
@@ -442,8 +483,6 @@ class Receiver(_Endpoint):
         self._source = Source(self.container, self._proton_object.remote_source)
 
         self._delivery_queue = _queue.Queue()
-
-        self.container._receivers_by_proton_object[self._proton_object] = self
 
     @property
     def source(self):
@@ -632,7 +671,7 @@ class _Handler(_handlers.MessagingHandler):
         op.complete()
 
     def on_acknowledged(self, event):
-        gb_sender = self.container._senders_by_proton_object[event.delivery.link]
+        gb_sender = self.container._endpoints[event.delivery.link]
         queue = gb_sender._tracker_queue
         acked = gb_sender._message_acked
 
@@ -668,7 +707,7 @@ class _Handler(_handlers.MessagingHandler):
         self.send_messages(event.subject)
 
     def send_messages(self, sender):
-        gb_sender = self.container._senders_by_proton_object[sender]
+        gb_sender = self.container._endpoints[sender]
         queue = gb_sender._message_queue
         sent = gb_sender._message_sent
 
@@ -681,5 +720,5 @@ class _Handler(_handlers.MessagingHandler):
             self.pending_deliveries[delivery] = (message, completion_fn)
 
     def on_message(self, event):
-        gb_receiver = self.container._receivers_by_proton_object[event.receiver]
+        gb_receiver = self.container._endpoints[event.receiver]
         gb_receiver._delivery_queue.put((event.delivery, event.message))
