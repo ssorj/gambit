@@ -51,7 +51,7 @@ class Container(object):
         self._event_injector = _reactor.EventInjector()
         self._proton_object.selectable(self._event_injector)
 
-        # proton object => gambit object
+        # proton endpoint => gambit endpoint
         self._endpoints = dict()
 
         self._connections = set()
@@ -297,7 +297,7 @@ class Connection(_Endpoint):
 
         assert message.to is not None
 
-        self.default_sender.send(message, on_delivery)
+        return self.default_sender.send(message, on_delivery)
 
     def await_delivery(self, timeout=None):
         """
@@ -390,7 +390,8 @@ class Sender(_Link):
 
         self._message_queue = _queue.Queue()
         self._tracker_port = _ReturnPort()
-        self._message_delivered = _threading.Event()
+
+        self._last_tracker = None
 
     def send(self, message, on_delivery=None, timeout=None):
         """
@@ -402,24 +403,28 @@ class Sender(_Link):
         If set, `on_delivery(tracker)` is called after the delivery is acknowledged.
 
         CONSIDER: Talk about threading issues arising from use of on_delivery.
+
+        :rtype: Tracker
         """
 
-        self._message_delivered.clear()
+        #self._message_delivered.clear()
 
         self._message_queue.put((message, on_delivery))
 
         event = _reactor.ApplicationEvent("message_enqueued", subject=self._proton_object)
         self.container._event_injector.trigger(event)
 
-        return self._tracker_port.get()
+        tracker = self._tracker_port.get()
+        self._last_tracker = tracker
+
+        return tracker
 
     def await_delivery(self, timeout=None):
         """
         Block until the remote peer acknowledges the most recent :meth:`send()`.
         """
 
-        while not self._message_delivered.wait(1):
-            pass
+        self._last_tracker.await_delivery()
 
     def send_request(self, message, receiver=None, timeout=None):
         """
@@ -550,6 +555,11 @@ class _Transfer(_Object):
         """
 
 class Tracker(_Transfer):
+    def __init__(self, container, proton_object, message):
+        super(Tracker, self).__init__(container, proton_object, message)
+
+        self._message_delivered = _threading.Event()
+
     @property
     def state(self):
         """
@@ -563,6 +573,14 @@ class Tracker(_Transfer):
         """
         The sender containing this tracker.
         """
+
+    def await_delivery(self):
+        """
+        Block until the remote peer acknowledges the tracked message.
+        """
+
+        while not self._message_delivered.wait(1):
+            pass
 
 class Delivery(_Transfer):
     def accept(self):
@@ -650,12 +668,8 @@ class _Handler(_handlers.MessagingHandler):
         op.complete()
 
     def on_acknowledged(self, event):
-        gb_sender = self.container._endpoints[event.delivery.link]
-        delivered = gb_sender._message_delivered
-
         tracker, on_delivery = self.pending_deliveries.pop(event.delivery)
-
-        delivered.set()
+        tracker._message_delivered.set()
 
         if on_delivery is not None:
             on_delivery(tracker)

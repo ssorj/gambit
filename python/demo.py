@@ -43,7 +43,7 @@ def receive_once(host, port):
 
         print("Received {}".format(delivery.message))
 
-def send_once_synchronously(host, port):
+def send_once_synchronously_using_sender_await_delivery(host, port):
     message = Message("hello")
 
     with Container("send") as cont:
@@ -56,8 +56,17 @@ def send_once_synchronously(host, port):
         sender.send(message, on_delivery)
         sender.await_delivery()
 
-        # tracker = sender.send(message)
-        # tracker.await_delivery()
+def send_once_synchronously_using_tracker_await_delivery(host, port):
+    message = Message("hello")
+
+    with Container("send") as cont:
+        conn = cont.connect(host, port)
+        sender = conn.open_sender("examples")
+
+        tracker = sender.send(message)
+        tracker.await_delivery()
+        
+        print("Sent {} ({})".format(tracker.message, tracker.state))
 
 def receive_once_with_explicit_acks(host, port):
     with Container("receive") as cont:
@@ -203,9 +212,14 @@ def main():
     send_once(host, port)
     receive_once(host, port)
 
-    # Send and receive once with a few more behaviors
+    # Send and receive once with one style of await_delivery
 
-    send_once_synchronously(host, port)
+    send_once_synchronously_using_sender_await_delivery(host, port)
+    receive_once_with_explicit_acks(host, port)
+
+    # Send and receive once with another style of await_delivery
+
+    send_once_synchronously_using_tracker_await_delivery(host, port)
     receive_once_with_explicit_acks(host, port)
 
     # Send and receive a batch of three
