@@ -1,10 +1,20 @@
+.. module:: gambit
+
 Gambit
 ======
+
+.. **Opening connections**
+
+.. **Sending messages**
+
+.. **Receiving messages**
+
+**Blocking**
 
 Blocking operations take optional timeout arguments.  If the timeout
 is exceeded, they raise a timeout error.
 
-.. module:: gambit
+.. **Thread safety**
 
 .. data:: IMMEDIATE
 
