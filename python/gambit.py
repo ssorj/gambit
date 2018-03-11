@@ -102,7 +102,7 @@ class Container(object):
         self._log("Connecting to {}:{}", host, port)
 
         op = _ConnectionOpen(self, host, port)
-        conn = op.gambit_object.get()
+        conn = op.gambit_object_port.get()
 
         self._connections.add(conn)
 
@@ -152,7 +152,7 @@ class _Operation(object):
         self.container = container
 
         self.proton_object = None
-        self.gambit_object = _ReturnPort()
+        self.gambit_object_port = _ReturnPort()
         self.completed = _threading.Event()
 
         self.container._operations.put(self)
@@ -167,9 +167,6 @@ class _Operation(object):
     def complete(self):
         self.container._log("Completing {}", self)
         self.completed.set()
-
-    def on_completion(self):
-        pass
 
     def await_completion(self):
         self.container._log("Waiting for completion of {}", self)
@@ -245,7 +242,7 @@ class Connection(_Endpoint):
 
         op = _SenderOpen(self.container, self, address)
 
-        return op.gambit_object.get()
+        return op.gambit_object_port.get()
 
     def open_receiver(self, address, **options):
         """
@@ -259,7 +256,7 @@ class Connection(_Endpoint):
 
         op = _ReceiverOpen(self.container, self, address)
 
-        return op.gambit_object.get()
+        return op.gambit_object_port.get()
 
     def open_anonymous_sender(self, **options):
         """
@@ -271,7 +268,7 @@ class Connection(_Endpoint):
 
         op = _SenderOpen(self.container, self, None)
 
-        return op.gambit_object.get()
+        return op.gambit_object_port.get()
 
     def open_dynamic_receiver(self, timeout=None, **options):
         """
@@ -284,7 +281,7 @@ class Connection(_Endpoint):
         """
 
         op = _ReceiverOpen(self.container, self, None)
-        receiver = op.gambit_object.get()
+        receiver = op.gambit_object_port.get()
 
         op.await_completion()
 
@@ -339,7 +336,7 @@ class _ConnectionOpen(_Operation):
         conn_url = "amqp://{}:{}".format(self.host, self.port)
 
         self.proton_object = pn_container.connect(conn_url, allowed_mechs=b"ANONYMOUS")
-        self.gambit_object.put(Connection(self.container, self.proton_object, self))
+        self.gambit_object_port.put(Connection(self.container, self.proton_object, self))
 
 class Session(_Endpoint):
     pass
@@ -350,7 +347,7 @@ class Session(_Endpoint):
 #         connection_url = "amqp://{}:{}".format(self.host, self.port)
 
 #         self.proton_object = pn_container.connect(connection_url, allowed_mechs=b"ANONYMOUS")
-#         self.gambit_object = Connection(self.container, self.proton_object, self)
+#         self.gambit_object_port.put(Connection(self.container, self.proton_object, self))
 
 class _Link(_Endpoint):
     def __init__(self, container, proton_object, open_operation):
@@ -392,9 +389,7 @@ class Sender(_Link):
         self._target = Target(self.container, self._proton_object.remote_target)
 
         self._message_queue = _queue.Queue()
-        self._tracker_queue = _queue.Queue(1)
-
-        self._message_sent = _threading.Event()
+        self._tracker_port = _ReturnPort()
         self._message_delivered = _threading.Event()
 
     def send(self, message, on_delivery=None, timeout=None):
@@ -409,7 +404,6 @@ class Sender(_Link):
         CONSIDER: Talk about threading issues arising from use of on_delivery.
         """
 
-        self._message_sent.clear()
         self._message_delivered.clear()
 
         self._message_queue.put((message, on_delivery))
@@ -417,8 +411,7 @@ class Sender(_Link):
         event = _reactor.ApplicationEvent("message_enqueued", subject=self._proton_object)
         self.container._event_injector.trigger(event)
 
-        while not self._message_sent.wait(1):
-            pass
+        return self._tracker_port.get()
 
     def await_delivery(self, timeout=None):
         """
@@ -427,9 +420,6 @@ class Sender(_Link):
 
         while not self._message_delivered.wait(1):
             pass
-
-        # XXX Not in use ATM
-        self._tracker_queue.get()
 
     def send_request(self, message, receiver=None, timeout=None):
         """
@@ -466,7 +456,7 @@ class _SenderOpen(_Operation):
         pn_connection = self.connection._proton_object
 
         self.proton_object = pn_container.create_sender(pn_connection, self.address)
-        self.gambit_object.put(Sender(self.container, self.proton_object, self))
+        self.gambit_object_port.put(Sender(self.container, self.proton_object, self))
 
 class Receiver(_Link):
     """
@@ -515,7 +505,7 @@ class _ReceiverOpen(_Operation):
             dynamic = True
 
         self.proton_object = pn_container.create_receiver(pn_connection, self.address, dynamic=dynamic)
-        self.gambit_object.put(Receiver(self.container, self.proton_object, self))
+        self.gambit_object_port.put(Receiver(self.container, self.proton_object, self))
 
 class _Terminus(_Object):
     def _get_address(self):
@@ -661,19 +651,9 @@ class _Handler(_handlers.MessagingHandler):
 
     def on_acknowledged(self, event):
         gb_sender = self.container._endpoints[event.delivery.link]
-        queue = gb_sender._tracker_queue
         delivered = gb_sender._message_delivered
 
-        message, on_delivery = self.pending_deliveries.pop(event.delivery)
-        tracker = Tracker(self.container, event.delivery, message)
-
-        with queue.mutex:
-            try:
-                queue._get()
-            except IndexError:
-                pass
-
-            queue._put(tracker)
+        tracker, on_delivery = self.pending_deliveries.pop(event.delivery)
 
         delivered.set()
 
@@ -698,15 +678,17 @@ class _Handler(_handlers.MessagingHandler):
     def send_messages(self, sender):
         gb_sender = self.container._endpoints[sender]
         queue = gb_sender._message_queue
-        sent = gb_sender._message_sent
+        port = gb_sender._tracker_port
 
         while sender.credit > 0 and not queue.empty():
             message, on_delivery = queue.get()
 
             delivery = sender.send(message)
-            sent.set()
+            tracker = Tracker(self.container, delivery, message)
 
-            self.pending_deliveries[delivery] = (message, on_delivery)
+            port.put(tracker)
+
+            self.pending_deliveries[delivery] = (tracker, on_delivery)
 
     def on_message(self, event):
         gb_receiver = self.container._endpoints[event.receiver]
