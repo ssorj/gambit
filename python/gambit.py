@@ -318,7 +318,7 @@ class Connection(_Endpoint):
 
         return op.gambit_object
 
-    def send(self, message, completion_fn=None, timeout=None):
+    def send(self, message, on_delivery=None, timeout=None):
         """
         Send a message using an anonymous sender.
         See :meth:`Sender.send()`.
@@ -328,17 +328,19 @@ class Connection(_Endpoint):
 
         assert message.to is not None
 
-        self._get_anonymous_sender().send(message, completion_fn)
+        self._get_anonymous_sender().send(message, on_delivery)
 
-    def await_ack(self, timeout=None):
+    def await_delivery(self, timeout=None):
         """
         Block until the remote peer acknowledges the most recent :meth:`send()`.
-        See :meth:`Sender.await_ack()`.
+        See :meth:`Sender.await_delivery()`.
+
+        CONSIDER alternate name await_ack()
 
         :rtype: Tracker
         """
 
-        return self._get_anonymous_sender().await_ack()
+        return self._get_anonymous_sender().await_delivery()
 
     def _get_anonymous_sender(self):
         if self._anonymous_sender is None:
@@ -371,18 +373,13 @@ class Session(_Endpoint):
 #         self.proton_object = pn_container.connect(connection_url, allowed_mechs=b"ANONYMOUS")
 #         self.gambit_object = Connection(self.container, self.proton_object, self)
 
-class Sender(_Endpoint):
+class _Link(_Endpoint):
     def __init__(self, container, proton_object, open_operation):
-        super(Sender, self).__init__(container, proton_object, open_operation)
+        super(_Link, self).__init__(container, proton_object, open_operation)
 
         self._connection = self.container._endpoints[self._proton_object.connection]
         self._target = Target(self.container, self._proton_object.remote_target)
-
-        self._message_queue = _queue.Queue()
-        self._tracker_queue = _queue.Queue(1)
-
-        self._message_sent = _threading.Event()
-        self._message_acked = _threading.Event()
+        self._source = Source(self.container, self._proton_object.remote_source)
 
     @property
     def connection(self):
@@ -393,6 +390,14 @@ class Sender(_Endpoint):
         return self._connection
 
     @property
+    def source(self):
+        """
+        The source terminus.
+        """
+
+        return self._source
+
+    @property
     def target(self):
         """
         The target terminus.
@@ -400,20 +405,33 @@ class Sender(_Endpoint):
 
         return self._target
 
-    def send(self, message, completion_fn=None, timeout=None):
+class Sender(_Link):
+    def __init__(self, container, proton_object, open_operation):
+        super(Sender, self).__init__(container, proton_object, open_operation)
+
+        self._connection = self.container._endpoints[self._proton_object.connection]
+        self._target = Target(self.container, self._proton_object.remote_target)
+
+        self._message_queue = _queue.Queue()
+        self._tracker_queue = _queue.Queue(1)
+
+        self._message_sent = _threading.Event()
+        self._message_delivered = _threading.Event()
+
+    def send(self, message, on_delivery=None, timeout=None):
         """
         Send a message.
 
         Blocks until credit is available and the message can be sent.
-        Use :meth:`await_ack()` to block until the remote peer acknowledges the message.
+        Use :meth:`await_delivery()` to block until the remote peer acknowledges the message.
 
-        If set, `completion_fn(tracker)` is called after the delivery is acknowledged.
+        If set, `on_delivery(tracker)` is called after the delivery is acknowledged.
         """
 
         self._message_sent.clear()
-        self._message_acked.clear()
+        self._message_delivered.clear()
 
-        self._message_queue.put((message, completion_fn))
+        self._message_queue.put((message, on_delivery))
 
         event = _reactor.ApplicationEvent("message_enqueued", subject=self._proton_object)
         self.container._event_injector.trigger(event)
@@ -421,7 +439,7 @@ class Sender(_Endpoint):
         while not self._message_sent.wait(1):
             pass
 
-    def await_ack(self, timeout=None):
+    def await_delivery(self, timeout=None):
         """
         Block until the remote peer acknowledges the most recent :meth:`send()`.
         Returns the tracker for the completed delivery.
@@ -429,7 +447,7 @@ class Sender(_Endpoint):
         :rtype: Tracker
         """
 
-        while not self._message_acked.wait(1):
+        while not self._message_delivered.wait(1):
             pass
 
         return self._tracker_queue.get()
@@ -471,7 +489,7 @@ class _SenderOpen(_Operation):
         self.proton_object = pn_container.create_sender(pn_connection, self.address)
         self.gambit_object = Sender(self.container, self.proton_object, self)
 
-class Receiver(_Endpoint):
+class Receiver(_Link):
     """
     A receiver is an iterable object.
     Each item returned during iteration is a message obtained by calling `receive()`.
@@ -480,17 +498,7 @@ class Receiver(_Endpoint):
     def __init__(self, container, proton_object, open_operation):
         super(Receiver, self).__init__(container, proton_object, open_operation)
 
-        self._source = Source(self.container, self._proton_object.remote_source)
-
         self._delivery_queue = _queue.Queue()
-
-    @property
-    def source(self):
-        """
-        The source terminus.
-        """
-
-        return self._source
 
     def receive(self, timeout=None):
         """
@@ -641,7 +649,7 @@ class _Handler(_handlers.MessagingHandler):
 
         # (operation class, proton endpoint) => operation
         self.pending_operations = dict()
-        # proton delivery => (proton_message, completion_fn)
+        # proton delivery => (proton_message, on_delivery)
         self.pending_deliveries = dict()
 
     def on_operation_enqueued(self, event):
@@ -673,9 +681,9 @@ class _Handler(_handlers.MessagingHandler):
     def on_acknowledged(self, event):
         gb_sender = self.container._endpoints[event.delivery.link]
         queue = gb_sender._tracker_queue
-        acked = gb_sender._message_acked
+        delivered = gb_sender._message_delivered
 
-        message, completion_fn = self.pending_deliveries.pop(event.delivery)
+        message, on_delivery = self.pending_deliveries.pop(event.delivery)
         tracker = Tracker(self.container, event.delivery, message)
 
         with queue.mutex:
@@ -686,10 +694,10 @@ class _Handler(_handlers.MessagingHandler):
 
             queue._put(tracker)
 
-        acked.set()
+        delivered.set()
 
-        if completion_fn is not None:
-            completion_fn(tracker)
+        if on_delivery is not None:
+            on_delivery(tracker)
 
     def on_accepted(self, event):
         self.on_acknowledged(event)
@@ -712,12 +720,12 @@ class _Handler(_handlers.MessagingHandler):
         sent = gb_sender._message_sent
 
         while sender.credit > 0 and not queue.empty():
-            message, completion_fn = queue.get()
+            message, on_delivery = queue.get()
 
             delivery = sender.send(message)
             sent.set()
 
-            self.pending_deliveries[delivery] = (message, completion_fn)
+            self.pending_deliveries[delivery] = (message, on_delivery)
 
     def on_message(self, event):
         gb_receiver = self.container._endpoints[event.receiver]

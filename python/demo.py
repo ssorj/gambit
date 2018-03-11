@@ -51,7 +51,7 @@ def send_once_synchronously(host, port):
         sender = conn.open_sender("examples")
 
         sender.send(message)
-        tracker = sender.await_ack()
+        tracker = sender.await_delivery()
 
         print("Sent {} ({})".format(tracker.message, tracker.state))
 
@@ -92,7 +92,7 @@ def receive_batch(host, port):
 def send_indefinitely(host, port, stopping):
     message = Message()
 
-    def completion_fn(tracker):
+    def on_delivery(tracker):
         print("Sent {} ({})".format(tracker.message, tracker.state))
 
     with Container("send") as cont:
@@ -101,7 +101,7 @@ def send_indefinitely(host, port, stopping):
 
         for i in xrange(sys.maxint):
             message.body = "message-{}".format(i)
-            sender.send(message, completion_fn=completion_fn)
+            sender.send(message, on_delivery=on_delivery)
 
             if stopping.is_set(): break
 
@@ -152,7 +152,7 @@ def respond_once(host, port):
         response.to = delivery.message.reply_to
 
         conn.send(response)
-        conn.await_ack()
+        conn.await_delivery()
 
         print("Processed {} and sent {}".format(delivery.message, response))
 
@@ -214,15 +214,16 @@ def main():
     stopping = threading.Event()
 
     send_thread = threading.Thread(target=send_indefinitely, args=(host, port, stopping))
-    send_thread.daemon = True
     send_thread.start()
 
     receive_thread = threading.Thread(target=receive_indefinitely, args=(host, port, stopping))
-    receive_thread.daemon = True
     receive_thread.start()
 
     time.sleep(0.02)
     stopping.set()
+
+    send_thread.join()
+    receive_thread.join()
 
     # Request and respond once
 
