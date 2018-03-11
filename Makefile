@@ -19,6 +19,10 @@
 
 export PYTHONPATH := ${PWD}/python:${PYTHONPATH}
 
+.PHONY: default
+default: clean demo docs
+	@echo SUCCESS
+
 .PHONY: demo
 demo:
 	scripts/run-demo

@@ -56,8 +56,6 @@ def send_once_synchronously(host, port):
         sender.send(message, on_delivery)
         sender.await_delivery()
 
-        # Talk about threading issues arising from use of on_delivery
-
         # tracker = sender.send(message)
         # tracker.await_delivery()
 

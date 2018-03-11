@@ -427,6 +427,8 @@ class Sender(_Link):
         Use :meth:`await_delivery()` to block until the remote peer acknowledges the message.
 
         If set, `on_delivery(tracker)` is called after the delivery is acknowledged.
+
+        CONSIDER: Talk about threading issues arising from use of on_delivery.
         """
 
         self._message_sent.clear()
@@ -453,7 +455,7 @@ class Sender(_Link):
 
     def send_request(self, message, receiver=None, timeout=None):
         """
-        CONSIDER
+        CONSIDER:
 
         Send a request message mapped to a receiver for collecting the response.
         Use :meth:`Receiver.receive()` to get responses.
