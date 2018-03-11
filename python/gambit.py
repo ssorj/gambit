@@ -102,11 +102,11 @@ class Container(object):
         self._log("Connecting to {}:{}", host, port)
 
         op = _ConnectionOpen(self, host, port)
-        op.await_start()
+        conn = op.gambit_object.get()
 
-        self._connections.add(op.gambit_object)
+        self._connections.add(conn)
 
-        return op.gambit_object
+        return conn
 
     def _log(self, message, *args):
         with _log_mutex:
@@ -152,9 +152,7 @@ class _Operation(object):
         self.container = container
 
         self.proton_object = None
-        self.gambit_object = None
-
-        self.started = _threading.Event()
+        self.gambit_object = _ReturnPort()
         self.completed = _threading.Event()
 
         self.container._operations.put(self)
@@ -163,29 +161,11 @@ class _Operation(object):
     def __repr__(self):
         return self.__class__.__name__
 
-    def start(self):
-        self.container._log("Starting {}", self)
-
-        self.on_start()
-
-        assert self.proton_object is not None
-        assert self.gambit_object is not None
-
-        self.started.set()
-
-    def on_start(self):
+    def init(self):
         raise NotImplementedError()
-
-    def await_start(self):
-        self.container._log("Waiting for start of {}", self)
-
-        while not self.started.wait(1):
-            pass
 
     def complete(self):
         self.container._log("Completing {}", self)
-
-        self.on_completion()
         self.completed.set()
 
     def on_completion(self):
@@ -242,11 +222,10 @@ class _EndpointClose(_Operation):
 
         self.endpoint = endpoint
 
-    def on_start(self):
+    def init(self):
         self.endpoint._proton_object.close()
 
         self.proton_object = self.endpoint._proton_object
-        self.gambit_object = self.endpoint
 
 class Connection(_Endpoint):
     def __init__(self, container, proton_object, open_operation):
@@ -265,9 +244,8 @@ class Connection(_Endpoint):
         assert address is not None
 
         op = _SenderOpen(self.container, self, address)
-        op.await_start()
 
-        return op.gambit_object
+        return op.gambit_object.get()
 
     def open_receiver(self, address, **options):
         """
@@ -280,9 +258,8 @@ class Connection(_Endpoint):
         assert address is not None
 
         op = _ReceiverOpen(self.container, self, address)
-        op.await_start()
 
-        return op.gambit_object
+        return op.gambit_object.get()
 
     def open_anonymous_sender(self, **options):
         """
@@ -293,9 +270,8 @@ class Connection(_Endpoint):
         """
 
         op = _SenderOpen(self.container, self, None)
-        op.await_start()
 
-        return op.gambit_object
+        return op.gambit_object.get()
 
     def open_dynamic_receiver(self, timeout=None, **options):
         """
@@ -308,9 +284,11 @@ class Connection(_Endpoint):
         """
 
         op = _ReceiverOpen(self.container, self, None)
+        receiver = op.gambit_object.get()
+
         op.await_completion()
 
-        return op.gambit_object
+        return receiver
 
     def send(self, message, on_delivery=None, timeout=None):
         """
@@ -356,18 +334,18 @@ class _ConnectionOpen(_Operation):
         self.host = host
         self.port = port
 
-    def on_start(self):
+    def init(self):
         pn_container = self.container._proton_object
-        connection_url = "amqp://{}:{}".format(self.host, self.port)
+        conn_url = "amqp://{}:{}".format(self.host, self.port)
 
-        self.proton_object = pn_container.connect(connection_url, allowed_mechs=b"ANONYMOUS")
-        self.gambit_object = Connection(self.container, self.proton_object, self)
+        self.proton_object = pn_container.connect(conn_url, allowed_mechs=b"ANONYMOUS")
+        self.gambit_object.put(Connection(self.container, self.proton_object, self))
 
 class Session(_Endpoint):
     pass
 
 # class _SessionOpen(_Operation):
-#     def on_start(self):
+#     def init(self):
 #         pn_container = self.container._proton_object
 #         connection_url = "amqp://{}:{}".format(self.host, self.port)
 
@@ -483,12 +461,12 @@ class _SenderOpen(_Operation):
         self.connection = connection
         self.address = address
 
-    def on_start(self):
+    def init(self):
         pn_container = self.container._proton_object
         pn_connection = self.connection._proton_object
 
         self.proton_object = pn_container.create_sender(pn_connection, self.address)
-        self.gambit_object = Sender(self.container, self.proton_object, self)
+        self.gambit_object.put(Sender(self.container, self.proton_object, self))
 
 class Receiver(_Link):
     """
@@ -528,7 +506,7 @@ class _ReceiverOpen(_Operation):
         self.connection = connection
         self.address = address
 
-    def on_start(self):
+    def init(self):
         pn_container = self.container._proton_object
         pn_connection = self.connection._proton_object
         dynamic = False
@@ -537,7 +515,7 @@ class _ReceiverOpen(_Operation):
             dynamic = True
 
         self.proton_object = pn_container.create_receiver(pn_connection, self.address, dynamic=dynamic)
-        self.gambit_object = Receiver(self.container, self.proton_object, self)
+        self.gambit_object.put(Receiver(self.container, self.proton_object, self))
 
 class _Terminus(_Object):
     def _get_address(self):
@@ -655,7 +633,9 @@ class _Handler(_handlers.MessagingHandler):
 
     def on_operation_enqueued(self, event):
         op = self.container._operations.get()
-        op.start()
+        op.init()
+
+        assert op.proton_object is not None
 
         self.pending_operations[(op.__class__, op.proton_object)] = op
 
@@ -731,3 +711,31 @@ class _Handler(_handlers.MessagingHandler):
     def on_message(self, event):
         gb_receiver = self.container._endpoints[event.receiver]
         gb_receiver._delivery_queue.put((event.delivery, event.message))
+
+class _ReturnPort(object):
+    def __init__(self):
+        self.value = None
+
+        self.lock = _threading.Lock()
+        self.empty = _threading.Condition(self.lock)
+        self.full = _threading.Condition(self.lock)
+
+    def put(self, value):
+        assert value is not None
+
+        with self.empty:
+            while self.value is not None:
+                self.empty.wait()
+
+            self.value = value
+            self.full.notify()
+
+    def get(self):
+        with self.full:
+            while self.value is None:
+                self.full.wait()
+
+            value = self.value
+            self.value = None
+            self.empty.notify()
+            return value
