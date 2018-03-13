@@ -55,7 +55,7 @@ def send_once_synchronously(host, port):
 
         print("Sent {} ({})".format(tracker.message, tracker.state))
 
-def receive_once_with_explicit_acks(host, port):
+def receive_once_with_explicit_accept(host, port):
     with Container("receive") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("examples", auto_accept=False)
@@ -74,9 +74,11 @@ def send_batch(host, port):
         sender = conn.open_sender("examples")
 
         for message in messages:
-            sender.send(message, on_delivery=lambda x: trackers.append(x))
+            tracker = sender.send(message)
+            trackers.append(tracker)
 
         for tracker in trackers:
+            tracker.await_delivery()
             print("Sent {} ({})".format(tracker.message, tracker.state))
 
 def receive_batch(host, port):
@@ -205,7 +207,7 @@ def main():
     # Send and receive once, sending synchronously and using explicit acks
 
     send_once_synchronously(host, port)
-    receive_once_with_explicit_acks(host, port)
+    receive_once_with_explicit_accept(host, port)
 
     # Send and receive a batch of three
 
