@@ -345,12 +345,14 @@ class Sender(_Link):
         self._message_queue = _queue.Queue()
         self._tracker_port = _ReturnPort()
 
-    def send(self, message, timeout=None, on_delivery=None):
+    def send(self, message, timeout=None, tracker_queue=None, on_delivery=None):
         """
         Send a message.
 
         Blocks until credit is available and the message can be sent.
         Use :meth:`Tracker.await_delivery()` to block until the remote peer acknowledges the message.
+
+        If set, a tracker for a completed delivery is placed on `tracker_queue` after the delivery is acknowledged.
 
         If set, `on_delivery(tracker)` is called after the delivery is acknowledged.
         It is called on another thread, not the main API thread.
@@ -359,7 +361,7 @@ class Sender(_Link):
         :rtype: Tracker
         """
 
-        self._message_queue.put((message, on_delivery))
+        self._message_queue.put((message, tracker_queue, on_delivery))
 
         event = _reactor.ApplicationEvent("message_enqueued", subject=self._proton_object)
         self.container._event_injector.trigger(event)
@@ -666,8 +668,11 @@ class _Handler(_handlers.MessagingHandler):
         self.pending_operations.pop((_EndpointClose, event.link)).complete()
 
     def on_acknowledged(self, event):
-        tracker, on_delivery = self.pending_deliveries.pop(event.delivery)
+        tracker, tracker_queue, on_delivery = self.pending_deliveries.pop(event.delivery)
         tracker._message_delivered.set()
+
+        if tracker_queue is not None:
+            tracker_queue.put(tracker)
 
         if on_delivery is not None:
             on_delivery(tracker)
@@ -693,14 +698,14 @@ class _Handler(_handlers.MessagingHandler):
         port = gb_sender._tracker_port
 
         while sender.credit > 0 and not queue.empty():
-            message, on_delivery = queue.get()
+            message, tracker_queue, on_delivery = queue.get()
 
             delivery = sender.send(message)
             tracker = Tracker(self.container, delivery, message)
 
             port.put(tracker)
 
-            self.pending_deliveries[delivery] = (tracker, on_delivery)
+            self.pending_deliveries[delivery] = (tracker, tracker_queue, on_delivery)
 
     def on_message(self, event):
         gb_receiver = self.container._endpoints[event.receiver]

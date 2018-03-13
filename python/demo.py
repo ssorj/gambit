@@ -17,6 +17,7 @@
 # under the License.
 #
 
+import Queue as queue
 import sys
 import threading
 import time
@@ -79,6 +80,21 @@ def send_batch(host, port):
 
         for tracker in trackers:
             tracker.await_delivery()
+            print("Sent {} ({})".format(tracker.message, tracker.state))
+
+def send_batch_with_tracker_queue(host, port):
+    messages = [Message("hello-{}".format(x)) for x in range(3)]
+    trackers = queue.Queue()
+
+    with Container("send") as cont:
+        conn = cont.connect(host, port)
+        sender = conn.open_sender("examples")
+
+        for message in messages:
+            sender.send(message, tracker_queue=trackers)
+
+        for message in messages:
+            tracker = trackers.get()
             print("Sent {} ({})".format(tracker.message, tracker.state))
 
 def receive_batch(host, port):
@@ -212,6 +228,11 @@ def main():
     # Send and receive a batch of three
 
     send_batch(host, port)
+    receive_batch(host, port)
+
+    # Send and receive a batch of three
+
+    send_batch_with_tracker_queue(host, port)
     receive_batch(host, port)
 
     # Send and receive indefinitely
