@@ -43,20 +43,7 @@ def receive_once(host, port):
 
         print("Received {}".format(delivery.message))
 
-def send_once_synchronously_using_sender_await_delivery(host, port):
-    message = Message("hello")
-
-    with Container("send") as cont:
-        conn = cont.connect(host, port)
-        sender = conn.open_sender("examples")
-
-        def on_delivery(tracker):
-            print("Sent {} ({})".format(tracker.message, tracker.state))
-
-        sender.send(message, on_delivery)
-        sender.await_delivery()
-
-def send_once_synchronously_using_tracker_await_delivery(host, port):
+def send_once_synchronously(host, port):
     message = Message("hello")
 
     with Container("send") as cont:
@@ -65,7 +52,7 @@ def send_once_synchronously_using_tracker_await_delivery(host, port):
 
         tracker = sender.send(message)
         tracker.await_delivery()
-        
+
         print("Sent {} ({})".format(tracker.message, tracker.state))
 
 def receive_once_with_explicit_acks(host, port):
@@ -75,7 +62,6 @@ def receive_once_with_explicit_acks(host, port):
 
         delivery = receiver.receive()
         delivery.accept()
-        # In principle: delivery.await_settlement()
 
         print("Received {}".format(delivery.message))
 
@@ -88,11 +74,7 @@ def send_batch(host, port):
         sender = conn.open_sender("examples")
 
         for message in messages:
-            # Talk about potential threading issues
-            # Callback runs on worker thread - there's no good way I see to run it on the API thread
-            # We would have to document the need for synchronization
-            # Which makes me prefer send() returning a tracker
-            sender.send(message, lambda x: trackers.append(x))
+            sender.send(message, on_delivery=lambda x: trackers.append(x))
 
         for tracker in trackers:
             print("Sent {} ({})".format(tracker.message, tracker.state))
@@ -107,8 +89,6 @@ def receive_batch(host, port):
             print("Received {}".format(delivery.message))
 
 def send_indefinitely(host, port, stopping):
-    message = Message()
-
     def on_delivery(tracker):
         print("Sent {} ({})".format(tracker.message, tracker.state))
 
@@ -117,8 +97,7 @@ def send_indefinitely(host, port, stopping):
         sender = conn.open_sender("examples")
 
         for i in xrange(sys.maxint):
-            message.body = "message-{}".format(i)
-            # OTOH, the callback makes the "side effect" case more convenient
+            message = Message("message-{}".format(i))
             sender.send(message, on_delivery=on_delivery)
 
             if stopping.is_set(): break
@@ -139,6 +118,8 @@ def request_once(host, port):
         sender = conn.open_sender("requests")
         receiver = conn.open_dynamic_receiver()
 
+        receiver.await_open()
+
         request = Message("abc")
         request.reply_to = receiver.source.address
 
@@ -154,7 +135,7 @@ def request_once_using_send_request(host, port):
         sender = conn.open_sender("requests")
 
         request = Message("abc")
-        
+
         receiver = sender.send_request(request)
         delivery = receiver.receive()
 
@@ -164,13 +145,14 @@ def respond_once(host, port):
     with Container("respond") as cont:
         conn = cont.connect(host, port)
         receiver = conn.open_receiver("requests")
+        sender = conn.open_anonymous_sender()
 
         delivery = receiver.receive()
 
         response = Message(delivery.message.body.upper())
         response.to = delivery.message.reply_to
 
-        tracker = conn.send(response)
+        tracker = sender.send(response)
         tracker.await_delivery()
 
         print("Processed {} and sent {}".format(delivery.message, response))
@@ -182,6 +164,8 @@ def request_batch(host, port):
         conn = cont.connect(host, port)
         sender = conn.open_sender("requests")
         receiver = conn.open_dynamic_receiver()
+
+        receiver.await_open()
 
         for request in requests:
             sender.send_request(request, receiver=receiver)
@@ -218,14 +202,9 @@ def main():
     send_once(host, port)
     receive_once(host, port)
 
-    # Send and receive once with one style of await_delivery
+    # Send and receive once, sending synchronously and using explicit acks
 
-    send_once_synchronously_using_sender_await_delivery(host, port)
-    receive_once_with_explicit_acks(host, port)
-
-    # Send and receive once with another style of await_delivery
-
-    send_once_synchronously_using_tracker_await_delivery(host, port)
+    send_once_synchronously(host, port)
     receive_once_with_explicit_acks(host, port)
 
     # Send and receive a batch of three

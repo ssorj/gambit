@@ -14,39 +14,29 @@ Gambit
 Blocking operations take optional timeout arguments.  If the timeout
 is exceeded, they raise a timeout error.
 
-The `send()` and `receive()` operations take a special timeout value
-`IMMEDIATE` that can be used to disable blocking and return a value if
-present or null if not.
-
 The endpoint-lifecycle methods `connect()`, `open_<endpoint>()`, and
-`close()` start the operation but do not complete them.  Use
-`await_open()` and `await_close()` to block until they are confirmed
-by the remote peer.
+`close()` start their respective operations but do not complete them.
+Use `await_open()` and `await_close()` to block until they are
+confirmed by the remote peer.
 
-Sender `send()` blocks until there is credit to send the message, but
-it does not wait until the message is acknowledged.  Use
-`await_delivery()` to do so.
-
-CONSIDER: Instead use `tracker.await_delivery()` or the `on_delivery`
-callback.
+Sender `send()` blocks until there is credit to send the message.
+It does not wait until the message is acknowledged.  The `send()`
+method returns a tracker, on which you can call `await_delivery()` to
+block until acknowledgment.
 
 Receiver `receive()` blocks until a message is available to return.
-No further blocking is usually required.
 
 .. **Thread safety**
 
-.. data:: IMMEDIATE
-
-   A special timeout value that requests a null return if the desired
-   result is unavailable at the time of the call.
-
-   CONSIDER: sender.sendable() and receiver.receivable() instead
+CONSIDER: Sender.sendable() and Receiver.receivable().
 
 .. autoclass:: gambit.Container
 
 .. autoclass:: gambit.Connection
+   :exclude-members: send, default_sender
 .. autoclass:: gambit.Session
 .. autoclass:: gambit.Sender
+   :exclude-members: send_request
 .. autoclass:: gambit.Receiver
 .. autoclass:: gambit.Source
 .. autoclass:: gambit.Target
