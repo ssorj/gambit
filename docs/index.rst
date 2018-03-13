@@ -14,9 +14,14 @@ Gambit
 Blocking operations take optional timeout arguments.  If the timeout
 is exceeded, they raise a timeout error.
 
-The endpoint-lifecycle methods `connect()`, `open_*()`, and `close()`
-start the operation but do not complete them.  Use `await_open()` and
-`await_close()` to block until they are confirmed by the remote peer.
+The `send()` and `receive()` operations take a special timeout value
+`IMMEDIATE` that can be used to disable blocking and return a value if
+present or null if not.
+
+The endpoint-lifecycle methods `connect()`, `open_<endpoint>()`, and
+`close()` start the operation but do not complete them.  Use
+`await_open()` and `await_close()` to block until they are confirmed
+by the remote peer.
 
 Sender `send()` blocks until there is credit to send the message, but
 it does not wait until the message is acknowledged.  Use
