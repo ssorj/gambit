@@ -88,6 +88,10 @@ def send_batch(host, port):
         sender = conn.open_sender("examples")
 
         for message in messages:
+            # Talk about potential threading issues
+            # Callback runs on worker thread - there's no good way I see to run it on the API thread
+            # We would have to document the need for synchronization
+            # Which makes me prefer send() returning a tracker
             sender.send(message, lambda x: trackers.append(x))
 
         for tracker in trackers:
@@ -114,6 +118,7 @@ def send_indefinitely(host, port, stopping):
 
         for i in xrange(sys.maxint):
             message.body = "message-{}".format(i)
+            # OTOH, the callback makes the "side effect" case more convenient
             sender.send(message, on_delivery=on_delivery)
 
             if stopping.is_set(): break
@@ -149,6 +154,7 @@ def request_once_using_send_request(host, port):
         sender = conn.open_sender("requests")
 
         request = Message("abc")
+        
         receiver = sender.send_request(request)
         delivery = receiver.receive()
 
@@ -164,8 +170,8 @@ def respond_once(host, port):
         response = Message(delivery.message.body.upper())
         response.to = delivery.message.reply_to
 
-        conn.send(response)
-        conn.await_delivery()
+        tracker = conn.send(response)
+        tracker.await_delivery()
 
         print("Processed {} and sent {}".format(delivery.message, response))
 

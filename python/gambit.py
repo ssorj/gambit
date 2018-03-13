@@ -31,13 +31,6 @@ _log_mutex = _threading.Lock()
 
 IMMEDIATE = 0
 
-class TimeoutError(Exception):
-    """
-    Raised if the requested timeout of a blocking operation is exceeded.
-    """
-
-    pass
-
 class Container(object):
     def __init__(self, id=None):
         self._proton_object = _reactor.Container(_Handler(self))
@@ -116,29 +109,6 @@ class Container(object):
             _sys.stdout.write("[{:.4}:{:.4}] {}\n".format(self.id, thread.name, message))
             _sys.stdout.flush()
 
-class Message(_proton.Message):
-    def _get_to(self):
-        """
-        The destination address of the message.
-        """
-        return self.address
-
-    def _set_to(self, address):
-        self.address = address
-
-    to = property(_get_to, _set_to)
-
-    def _get_user(self):
-        """
-        The user associated with this message.
-        """
-        return self.user_id
-
-    def _set_user(self, user_id):
-        self.user_id = user_id
-
-    user = property(_get_user, _set_user)
-
 class _Object(object):
     def __init__(self, container, proton_object):
         self.container = container
@@ -208,6 +178,8 @@ class _Endpoint(_Object):
     def await_close(self, timeout=None):
         """
         Block until the remote peer confirms the close.
+
+        :rtype: ErrorCondition
         """
 
         assert self._close_operation is not None
@@ -606,6 +578,65 @@ class Delivery(_Transfer):
         """
         The receiver containing this delivery.
         """
+
+class Message(_proton.Message):
+    def _get_to(self):
+        """
+        The destination address of the message.
+        """
+        return self.address
+
+    def _set_to(self, address):
+        self.address = address
+
+    to = property(_get_to, _set_to)
+
+    def _get_user(self):
+        """
+        The user associated with this message.
+        """
+        return self.user_id
+
+    def _set_user(self, user_id):
+        self.user_id = user_id
+
+    user = property(_get_user, _set_user)
+
+class ErrorCondition(_Object):
+    @property
+    def name(self):
+        """
+        The name of the error condition.
+        """
+
+    @property
+    def description(self):
+        """
+        A description of the error condition.
+        """
+
+    @property
+    def properties(self):
+        """
+        Extra information about the error condition.
+        
+        :rtype: dict
+        """
+
+class Error(Exception):
+    """
+    The base Gambit API error.
+    """
+        
+class TimeoutError(Error):
+    """
+    Raised if the requested timeout of a blocking operation is exceeded.
+    """
+
+class ConversionError(Error):
+    """
+    Raised if data cannot be converted.
+    """
 
 class _WorkerThread(_threading.Thread):
     def __init__(self, container):
