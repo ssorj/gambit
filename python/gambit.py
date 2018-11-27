@@ -215,15 +215,22 @@ class Connection(_Endpoint):
 
         return _SenderOpen(self.container, self, address).get_object()
 
-    def open_receiver(self, address, **options):
+    def open_receiver(self, address, on_message=None, **options):
         """
         Initiate receiver open.
         Use :meth:`Receiver.await_open()` to block until the remote peer confirms the open.
+
+        If set, `on_message(delivery)` is called when a message is received.
+        It is called on another thread, not the main API thread.
+        Users must take care to use thread-safe code in the callback.
 
         :rtype: Receiver
         """
 
         assert address is not None
+
+        if on_message is not None:
+            raise NotImplementedError()
 
         return _ReceiverOpen(self.container, self, address).get_object()
 
