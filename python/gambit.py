@@ -249,6 +249,8 @@ class Connection(_Endpoint):
         Intiate open of a sender with a dynamic source address supplied by the remote peer.
         See :meth:`open_receiver()`.
 
+        CONSIDER: Unlike the other opens, make this one block until the source address is received.
+
         :rtype: Receiver
         """
 
