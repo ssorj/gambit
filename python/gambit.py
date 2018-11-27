@@ -244,7 +244,7 @@ class Connection(_Endpoint):
 
         return _SenderOpen(self.container, self, None).get_object()
 
-    def open_dynamic_receiver(self, timeout=None, **options):
+    def open_dynamic_receiver(self, **options):
         """
         Intiate open of a sender with a dynamic source address supplied by the remote peer.
         See :meth:`open_receiver()`.
@@ -390,8 +390,8 @@ class Sender(_Link):
         """
 
         if receiver is None:
-            receiver = self.connection.open_dynamic_receiver(timeout=timeout)
-            receiver.await_open()
+            receiver = self.connection.open_dynamic_receiver()
+            receiver.await_open(timeout=timeout)
 
         message.reply_to = receiver.source.address
 
