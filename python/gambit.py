@@ -246,15 +246,19 @@ class Connection(_Endpoint):
 
     def open_dynamic_receiver(self, **options):
         """
-        Intiate open of a sender with a dynamic source address supplied by the remote peer.
+        Open a sender with a dynamic source address supplied by the remote peer.
         See :meth:`open_receiver()`.
 
-        CONSIDER: Unlike the other opens, make this one block until the source address is received.
+        REVIEW: Unlike the other open methods, this one blocks until the remote peer
+        confirms the open and supplies the source address.
 
         :rtype: Receiver
         """
 
-        return _ReceiverOpen(self.container, self, None).get_object()
+        receiver = _ReceiverOpen(self.container, self, None).get_object()
+        receiver.await_open()
+
+        return receiver
 
     def send(self, message, on_delivery=None, timeout=None):
         """
@@ -359,9 +363,11 @@ class Sender(_Link):
         Send a message.
 
         Blocks until credit is available and the message can be sent.
-        Use :meth:`Tracker.await_delivery()` to block until the remote peer acknowledges the message.
+        Use :meth:`Tracker.await_delivery()` to block until the remote peer acknowledges
+        the message.
 
-        If set, a tracker for a completed delivery is placed on `tracker_queue` after the delivery is acknowledged.
+        If set, a tracker for a completed delivery is placed on `tracker_queue` after the
+        delivery is acknowledged.  XXX This should happen earlier - as soon as we send.
 
         If set, `on_delivery(tracker)` is called after the delivery is acknowledged.
         It is called on another thread, not the main API thread.
