@@ -82,21 +82,19 @@ def send_batch(host, port):
             tracker.await_delivery()
             print("Sent {} ({})".format(tracker.message, tracker.state))
 
-def send_batch_with_tracker_queue(host, port):
+def send_batch_with_delivery_callback(host, port):
     messages = [Message("hello-{}".format(x)) for x in range(3)]
-    trackers = queue.Queue()
+
+    def on_delivery(tracker):
+        print("Sent {} ({})".format(tracker.message, tracker.state))
 
     with Container("send") as cont:
         conn = cont.connect(host, port)
         sender = conn.open_sender("examples")
 
         for message in messages:
-            sender.send(message, tracker_queue=trackers)
-
-        for message in messages:
-            tracker = trackers.get()
-            print("Sent {} ({})".format(tracker.message, tracker.state))
-
+            sender.send(message, on_delivery=on_delivery)
+            
 def receive_batch(host, port):
     with Container("receive") as cont:
         conn = cont.connect(host, port)
@@ -136,25 +134,11 @@ def request_once(host, port):
         sender = conn.open_sender("requests")
         receiver = conn.open_dynamic_receiver()
 
-        receiver.await_open()
-
         request = Message("abc")
         request.reply_to = receiver.source.address
 
         sender.send(request)
 
-        delivery = receiver.receive()
-
-        print("Sent {} and received {}".format(request, delivery.message))
-
-def request_once_using_send_request(host, port):
-    with Container("request") as cont:
-        conn = cont.connect(host, port)
-        sender = conn.open_sender("requests")
-
-        request = Message("abc")
-
-        receiver = sender.send_request(request)
         delivery = receiver.receive()
 
         print("Sent {} and received {}".format(request, delivery.message))
@@ -182,8 +166,6 @@ def request_batch(host, port):
         conn = cont.connect(host, port)
         sender = conn.open_sender("requests")
         receiver = conn.open_dynamic_receiver()
-
-        receiver.await_open()
 
         for request in requests:
             sender.send_request(request, receiver=receiver)
@@ -230,9 +212,9 @@ def main():
     send_batch(host, port)
     receive_batch(host, port)
 
-    # Send and receive a batch of three
+    # Send and receive a batch of three using the delivery callback
 
-    send_batch_with_tracker_queue(host, port)
+    send_batch_with_delivery_callback(host, port)
     receive_batch(host, port)
 
     # Send and receive indefinitely
@@ -257,15 +239,6 @@ def main():
     respond_thread.start()
 
     request_once(host, port)
-
-    respond_thread.join()
-
-    # Request using send_request and respond once
-
-    respond_thread = threading.Thread(target=respond_once, args=(host, port))
-    respond_thread.start()
-
-    request_once_using_send_request(host, port)
 
     respond_thread.join()
 
