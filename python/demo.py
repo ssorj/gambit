@@ -94,7 +94,7 @@ def send_batch_with_delivery_callback(host, port):
 
         for message in messages:
             sender.send(message, on_delivery=on_delivery)
-            
+
 def receive_batch(host, port):
     with Container("receive") as cont:
         conn = cont.connect(host, port)
@@ -168,7 +168,9 @@ def request_batch(host, port):
         receiver = conn.open_dynamic_receiver()
 
         for request in requests:
-            sender.send_request(request, receiver=receiver)
+            request.reply_to = receiver.source.address
+
+            sender.send(request)
 
         for request in requests:
             delivery = receiver.receive()
