@@ -382,6 +382,24 @@ class Sender(_Link):
 
         return self._tracker_port.get()
 
+    def try_send(self, message, on_delivery=None):
+        """
+        Send a message without blocking for credit.
+
+        If there is credit, the message is sent and a tracker is
+        returned.  Use :meth:`Tracker.await_delivery()` to block until
+        the remote peer acknowledges the message.
+
+        If no credit is available, the method immediately returns
+        `None`.
+
+        If set, `on_delivery(tracker)` is called after the delivery is acknowledged.
+        It is called on another thread, not the main API thread.
+        Users must take care to use thread-safe code in the callback.
+
+        :rtype: Tracker
+        """
+
     def send_request(self, message, receiver=None, timeout=None):
         """
         CONSIDER:
@@ -441,6 +459,14 @@ class Receiver(_Link):
 
         pn_delivery, pn_message = self._delivery_queue.get()
         return Delivery(self.container, pn_delivery, pn_message)
+
+    def try_receive(self):
+        """
+        Receive a delivery containing a message if one is already
+        available.  Otherwise, return `None`.
+
+        :rtype: Delivery
+        """
 
     def __iter__(self):
         return _ReceiverIterator(self)
