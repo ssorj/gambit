@@ -17,8 +17,9 @@
 # under the License.
 #
 
+import asyncio as _asyncio
 import collections as _collections
-import Queue as _queue
+import queue as _queue
 import sys as _sys
 import threading as _threading
 import traceback as _traceback
@@ -29,19 +30,19 @@ import proton.reactor as _reactor
 
 _log_mutex = _threading.Lock()
 
-class Container(object):
+class Container:
     def __init__(self, id=None):
-        self._proton_object = _reactor.Container(_Handler(self))
+        self._pn_object = _reactor.Container(_Handler(self))
 
         if id is not None:
-            self._proton_object.container_id = id
+            self._pn_object.container_id = id
 
         self._operations = _queue.Queue()
         self._worker_thread = _WorkerThread(self)
         self._lock = _threading.Lock()
 
         self._event_injector = _reactor.EventInjector()
-        self._proton_object.selectable(self._event_injector)
+        self._pn_object.selectable(self._event_injector)
 
         # proton endpoint => gambit endpoint
         self._endpoints = dict()
@@ -79,9 +80,17 @@ class Container(object):
         """
         The unique identity of the container.
         """
-        return self._proton_object.container_id
+        return self._pn_object.container_id
 
-    def connect(self, host, port, **options):
+    def _fire_event(self, event_name, *args):
+        future = _asyncio.get_event_loop().create_future()
+        event = _reactor.ApplicationEvent(event_name, subject=(future, *args))
+
+        self._event_injector.trigger(event)
+
+        return future
+
+    def connect(self, conn_url, **options):
         """
         Initiate connection open.
         Use :meth:`Connection.await_open()` to block until the remote peer confirms the open.
@@ -89,18 +98,13 @@ class Container(object):
         :rtype: Connection
         """
 
-        self._log("Connecting to {}:{}", host, port)
+        self._log("Connecting to {}", conn_url)
 
         with self._lock:
             if not self._worker_thread.is_alive():
                 self._worker_thread.start()
 
-        op = _ConnectionOpen(self, host, port)
-        conn = op.gambit_object_port.get()
-
-        self._connections.add(conn)
-
-        return conn
+        return self._fire_event("gambit_connect", conn_url)
 
     def _log(self, message, *args):
         with _log_mutex:
@@ -110,52 +114,19 @@ class Container(object):
             _sys.stdout.write("[{:.4}:{:.4}] {}\n".format(self.id, thread.name, message))
             _sys.stdout.flush()
 
-class _Object(object):
+class _Object:
     def __init__(self, container, proton_object):
         self.container = container
-        self._proton_object = proton_object
+        self._pn_object = proton_object
 
     def __repr__(self):
-        return "{}({})".format(self.__class__.__name__, self._proton_object)
-
-class _Operation(object):
-    def __init__(self, container):
-        self.container = container
-
-        self.proton_object = None
-        self.gambit_object_port = _ReturnPort()
-        self.completed = _threading.Event()
-
-        self.container._operations.put(self)
-        self.container._event_injector.trigger(_reactor.ApplicationEvent("operation_enqueued"))
-
-    def __repr__(self):
-        return self.__class__.__name__
-
-    def init(self):
-        raise NotImplementedError()
-
-    def get_object(self):
-        return self.gambit_object_port.get()
-
-    def complete(self):
-        self.container._log("Completing {}", self)
-        self.completed.set()
-
-    def await_completion(self, timeout=None):
-        self.container._log("Waiting for completion of {}", self)
-
-        while not self.completed.wait(1):
-            pass # XXX Implement timeout
+        return "{}({})".format(self.__class__.__name__, self._pn_object)
 
 class _Endpoint(_Object):
     def __init__(self, container, proton_object, open_operation):
         super(_Endpoint, self).__init__(container, proton_object)
 
-        self._open_operation = open_operation
-        self._close_operation = None
-
-        self.container._endpoints[self._proton_object] = self
+        self.container._endpoints[self._pn_object] = self
 
     def __enter__(self):
         return self
@@ -169,53 +140,28 @@ class _Endpoint(_Object):
         Use :meth:`await_close()` to block until the remote peer confirms the close.
         """
 
-        assert self._close_operation is None
-        self._close_operation = _EndpointClose(self.container, self)
-
-    def await_open(self, timeout=None):
-        """
-        Block until the remote peer confirms the open.
-        """
-
-        self._open_operation.await_completion(timeout=timeout)
-
-    def await_close(self, timeout=None):
-        """
-        Block until the remote peer confirms the close.
-
-        :rtype: ErrorCondition
-        """
-
-        assert self._close_operation is not None
-        self._close_operation.await_completion(timeout=timeout)
-
-class _EndpointClose(_Operation):
-    def __init__(self, container, endpoint):
-        super(_EndpointClose, self).__init__(container)
-
-        self.endpoint = endpoint
-
-    def init(self):
-        self.endpoint._proton_object.close()
-        self.proton_object = self.endpoint._proton_object
+        return self.container._fire_event("gambit_close_endpoint", self._pn_object)
 
 class Connection(_Endpoint):
-    def __init__(self, container, proton_object, open_operation):
-        super(Connection, self).__init__(container, proton_object, open_operation)
+    def __init__(self, container, pn_object, open_operation):
+        super(Connection, self).__init__(container, pn_object, open_operation)
 
         self._default_sender = None
+
+    def open_session(self, **options):
+        return self.container._fire_event("gambit_open_session", self._pn_object)
 
     def open_sender(self, address, **options):
         """
         Initiate sender open.
-        Use :meth:`Sender.await_open()` to block until the remote peer confirms the open.
+        XXX Use :meth:`Sender.await_open()` to block until the remote peer confirms the open.
 
-        :rtype: Sender
+        :rtype: XXX Sender
         """
 
         assert address is not None
 
-        return _SenderOpen(self.container, self, address).get_object()
+        return self.container._fire_event("gambit_open_sender", self._pn_object, address)
 
     def open_receiver(self, address, on_message=None, **options):
         """
@@ -226,15 +172,12 @@ class Connection(_Endpoint):
         It is called on another thread, not the main API thread.
         Users must take care to use thread-safe code in the callback.
 
-        :rtype: Receiver
+        :rtype: XXX Receiver
         """
 
         assert address is not None
 
-        if on_message is not None:
-            raise NotImplementedError()
-
-        return _ReceiverOpen(self.container, self, address).get_object()
+        return self.container._fire_event("gambit_open_receiver", self._pn_object, address)
 
     def open_anonymous_sender(self, **options):
         """
@@ -244,7 +187,7 @@ class Connection(_Endpoint):
         :rtype: Sender
         """
 
-        return _SenderOpen(self.container, self, None).get_object()
+        raise NotImplementedError()
 
     def open_dynamic_receiver(self, timeout=None, **options):
         """
@@ -257,24 +200,7 @@ class Connection(_Endpoint):
         :rtype: Receiver
         """
 
-        receiver = _ReceiverOpen(self.container, self, None).get_object()
-        receiver.await_open(timeout=timeout)
-
-        return receiver
-
-    def send(self, message, timeout=None, on_delivery=None):
-        """
-        Send a message using an anonymous sender.
-        See :meth:`Sender.send()`.
-
-        The supplied message must have a non-empty `to` address.
-
-        :rtype: Tracker
-        """
-
-        assert message.to is not None
-
-        return self.default_sender.send(message, timeout=timeout, on_delivery=on_delivery)
+        raise NotImplementedError()
 
     @property
     def default_session(self):
@@ -282,49 +208,18 @@ class Connection(_Endpoint):
         The default session.
         """
 
-    @property
-    def default_sender(self):
-        """
-        The default sender.
-        """
-
-        if self._default_sender is None:
-            self._default_sender = self.open_anonymous_sender()
-
-        return self._default_sender
-
-class _ConnectionOpen(_Operation):
-    def __init__(self, container, host, port):
-        super(_ConnectionOpen, self).__init__(container)
-
-        self.host = host
-        self.port = port
-
-    def init(self):
-        pn_container = self.container._proton_object
-        conn_url = "amqp://{}:{}".format(self.host, self.port)
-
-        self.proton_object = pn_container.connect(conn_url, allowed_mechs=b"ANONYMOUS")
-        self.gambit_object_port.put(Connection(self.container, self.proton_object, self))
+        raise NotImplementedError()
 
 class Session(_Endpoint):
     pass
-
-# class _SessionOpen(_Operation):
-#     def init(self):
-#         pn_container = self.container._proton_object
-#         connection_url = "amqp://{}:{}".format(self.host, self.port)
-
-#         self.proton_object = pn_container.connect(connection_url, allowed_mechs=b"ANONYMOUS")
-#         self.gambit_object_port.put(Connection(self.container, self.proton_object, self))
 
 class _Link(_Endpoint):
     def __init__(self, container, proton_object, open_operation):
         super(_Link, self).__init__(container, proton_object, open_operation)
 
-        self._connection = self.container._endpoints[self._proton_object.connection]
-        self._target = Target(self.container, self._proton_object.remote_target)
-        self._source = Source(self.container, self._proton_object.remote_source)
+        self._connection = self.container._endpoints[self._pn_object.connection]
+        self._target = Target(self.container, self._pn_object.remote_target)
+        self._source = Source(self.container, self._pn_object.remote_source)
 
     @property
     def connection(self):
@@ -354,11 +249,10 @@ class Sender(_Link):
     def __init__(self, container, proton_object, open_operation):
         super(Sender, self).__init__(container, proton_object, open_operation)
 
-        self._connection = self.container._endpoints[self._proton_object.connection]
-        self._target = Target(self.container, self._proton_object.remote_target)
+        self._connection = self.container._endpoints[self._pn_object.connection]
+        self._target = Target(self.container, self._pn_object.remote_target)
 
-        self._message_queue = _queue.Queue()
-        self._tracker_port = _ReturnPort()
+        # self._message_queue = _queue.Queue() # XXX this may come back for blocking
 
     def send(self, message, timeout=None, on_delivery=None):
         """
@@ -375,12 +269,7 @@ class Sender(_Link):
         :rtype: Tracker
         """
 
-        self._message_queue.put((message, on_delivery))
-
-        event = _reactor.ApplicationEvent("message_enqueued", subject=self._proton_object)
-        self.container._event_injector.trigger(event)
-
-        return self._tracker_port.get()
+        return self.container._fire_event("gambit_send", self._pn_object, message)
 
     def try_send(self, message, on_delivery=None):
         """
@@ -400,42 +289,7 @@ class Sender(_Link):
         :rtype: Tracker
         """
 
-    def send_request(self, message, receiver=None, timeout=None):
-        """
-        CONSIDER:
-
-        Send a request message mapped to a receiver for collecting the response.
-        Use :meth:`Receiver.receive()` to get responses.
-
-        The `reply_to` address of `message` is set to the source address of the receiver.
-
-        If `receiver` is none, a receiver is created internally using :meth:`open_dynamic_receiver()`.
-
-        :rtype: Receiver
-        """
-
-        if receiver is None:
-            receiver = self.connection.open_dynamic_receiver()
-
-        message.reply_to = receiver.source.address
-
-        self.send(message, timeout=timeout)
-
-        return receiver
-
-class _SenderOpen(_Operation):
-    def __init__(self, container, connection, address):
-        super(_SenderOpen, self).__init__(container)
-
-        self.connection = connection
-        self.address = address
-
-    def init(self):
-        pn_container = self.container._proton_object
-        pn_connection = self.connection._proton_object
-
-        self.proton_object = pn_container.create_sender(pn_connection, self.address)
-        self.gambit_object_port.put(Sender(self.container, self.proton_object, self))
+        raise NotImplementedError()
 
 class Receiver(_Link):
     """
@@ -468,6 +322,8 @@ class Receiver(_Link):
         :rtype: Delivery
         """
 
+        raise NotImplementedError()
+
     def __iter__(self):
         return _ReceiverIterator(self)
 
@@ -478,33 +334,15 @@ class _ReceiverIterator(object):
     def next(self):
         return self._receiver.receive()
 
-class _ReceiverOpen(_Operation):
-    def __init__(self, container, connection, address):
-        super(_ReceiverOpen, self).__init__(container)
-
-        self.connection = connection
-        self.address = address
-
-    def init(self):
-        pn_container = self.container._proton_object
-        pn_connection = self.connection._proton_object
-        dynamic = False
-
-        if self.address is None:
-            dynamic = True
-
-        self.proton_object = pn_container.create_receiver(pn_connection, self.address, dynamic=dynamic)
-        self.gambit_object_port.put(Receiver(self.container, self.proton_object, self))
-
 class _Terminus(_Object):
     def _get_address(self):
         """
         The source or target address.
         """
-        return self._proton_object.address
+        return self._pn_object.address
 
     def _set_address(self, address):
-        self._proton_object.address = address
+        self._pn_object.address = address
 
     address = property(_get_address, _set_address)
 
@@ -551,21 +389,13 @@ class Tracker(_Transfer):
         The state of the delivery as reported by the remote peer.
         """
 
-        return self._proton_object.remote_state
+        return self._pn_object.remote_state
 
     @property
     def sender(self):
         """
         The sender containing this tracker.
         """
-
-    def await_delivery(self):
-        """
-        Block until the remote peer acknowledges the tracked message.
-        """
-
-        while not self._message_delivered.wait(1):
-            pass
 
 class Delivery(_Transfer):
     def accept(self):
@@ -663,14 +493,14 @@ class _WorkerThread(_threading.Thread):
 
     def run(self):
         try:
-            self.container._proton_object.run()
+            self.container._pn_object.run()
         except KeyboardInterrupt:
             raise
 
     def stop(self):
         self.container._log("Stopping the worker thread")
 
-        self.container._proton_object.stop()
+        self.container._pn_object.stop()
 
 class _Handler(_handlers.MessagingHandler):
     def __init__(self, container):
@@ -678,40 +508,80 @@ class _Handler(_handlers.MessagingHandler):
 
         self.container = container
 
+        # XXX
+        self.pending_futures = dict()
+
         # (operation class, proton endpoint) => operation
         self.pending_operations = dict()
         # proton delivery => (proton_message, on_delivery)
         self.pending_deliveries = dict()
 
-    def on_operation_enqueued(self, event):
-        op = self.container._operations.get()
-        op.init()
-
-        assert op.proton_object is not None
-
-        self.pending_operations[(op.__class__, op.proton_object)] = op
+    def on_gambit_connect(self, event):
+        future, conn_url = event.subject
+        self.container._pn_object.connect(conn_url, allowed_mechs="ANONYMOUS").__future = future
 
     def on_connection_opened(self, event):
-        self.pending_operations.pop((_ConnectionOpen, event.connection)).complete()
+        future = event.connection.__future
+        conn = Connection(self.container, event.connection, None)
+        future.get_loop().call_soon_threadsafe(lambda: future.set_result(conn))
 
-    def on_connection_closed(self, event):
-        self.pending_operations.pop((_EndpointClose, event.connection)).complete()
+    # def on_gambit_open_session(self, event):
+    #     print(333)
+    #     pn_conn, future = event.subject
+    #     pn_conn.session().__future = future
+    #     print(444)
+    #
+    # def on_session_opened(self, event):
+    #     print(222)
+    #     future = event.session.__future
+    #     session = Session(self.container, event.session, None)
+    #     future.get_loop().call_soon_threadsafe(lambda: future.set_result(session))
+
+    def on_gambit_open_sender(self, event):
+        future, pn_conn, address = event.subject
+        self.container._pn_object.create_sender(pn_conn, address).__future = future
+
+    def on_gambit_open_receiver(self, event):
+        future, pn_conn, address = event.subject
+        dynamic = address is None
+        self.container._pn_object.create_receiver(pn_conn, address, dynamic=dynamic).__future = future
 
     def on_link_opened(self, event):
         if event.link.is_sender:
-            self.pending_operations.pop((_SenderOpen, event.link)).complete()
-        else:
-            self.pending_operations.pop((_ReceiverOpen, event.link)).complete()
+            future = event.link.__future
+            sender = Sender(self.container, event.link, None)
+            future.get_loop().call_soon_threadsafe(lambda: future.set_result(sender))
+
+        if event.link.is_receiver:
+            future = event.link.__future
+            receiver = Receiver(self.container, event.link, None)
+            future.get_loop().call_soon_threadsafe(lambda: future.set_result(receiver))
+
+    def on_gambit_close_endpoint(self, event):
+        future, pn_endpoint = event.subject
+        pn_endpoint.close()
+        pn_endpoint.__future = future
+
+    def on_connection_closed(self, event):
+        future = event.connection.__future
+        future.get_loop().call_soon_threadsafe(lambda: future.set_result(None))
+
+    def on_session_closed(self, event):
+        future = event.session.__future
+        future.get_loop().call_soon_threadsafe(lambda: future.set_result(None))
 
     def on_link_closed(self, event):
-        self.pending_operations.pop((_EndpointClose, event.link)).complete()
+        future = event.link.__future
+        future.get_loop().call_soon_threadsafe(lambda: future.set_result(None))
+
+    def on_gambit_send(self, event):
+        future, pn_sender, message = event.subject
+        pn_sender.send(message).__future = future
 
     def on_acknowledged(self, event):
-        tracker, on_delivery = self.pending_deliveries.pop(event.delivery)
-        tracker._message_delivered.set()
-
-        if on_delivery is not None:
-            on_delivery(tracker)
+        future = event.delivery.__future
+        tracker = Tracker(self.container, event.delivery, event.message)
+        future.get_loop().call_soon_threadsafe(lambda: future.set_result(tracker))
 
     def on_accepted(self, event):
         self.on_acknowledged(event)
@@ -722,26 +592,26 @@ class _Handler(_handlers.MessagingHandler):
     def on_released(self, event):
         self.on_acknowledged(event)
 
-    def on_sendable(self, event):
-        self.send_messages(event.sender)
+    # def on_sendable(self, event):
+    #     self.send_messages(event.sender)
 
-    def on_message_enqueued(self, event):
-        self.send_messages(event.subject)
+    # def on_message_enqueued(self, event):
+    #     self.send_messages(event.subject)
 
-    def send_messages(self, sender):
-        gb_sender = self.container._endpoints[sender]
-        queue = gb_sender._message_queue
-        port = gb_sender._tracker_port
+    # def send_messages(self, sender):
+    #     gb_sender = self.container._endpoints[sender]
+    #     queue = gb_sender._message_queue
+    #     port = gb_sender._tracker_port
 
-        while sender.credit > 0 and not queue.empty():
-            message, on_delivery = queue.get()
+    #     while sender.credit > 0 and not queue.empty():
+    #         message, on_delivery = queue.get()
 
-            delivery = sender.send(message)
-            tracker = Tracker(self.container, delivery, message)
+    #         delivery = sender.send(message)
+    #         tracker = Tracker(self.container, delivery, message)
 
-            port.put(tracker)
+    #         port.put(tracker)
 
-            self.pending_deliveries[delivery] = (tracker, on_delivery)
+    #         self.pending_deliveries[delivery] = (tracker, on_delivery)
 
     def on_message(self, event):
         gb_receiver = self.container._endpoints[event.receiver]

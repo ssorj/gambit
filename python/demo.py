@@ -17,244 +17,268 @@
 # under the License.
 #
 
-import Queue as queue
+import asyncio
+import queue
 import sys
 import threading
 import time
 
 from gambit import *
 
-def send_once(host, port):
-    message = Message("hello")
+async def endpoints(conn_url):
+    with Container("endpoints-1") as client:
+        conn = await client.connect(conn_url)
+        #session = await conn.open_session()
+        sender = await conn.open_sender("abc")
+        receiver = await conn.open_receiver("abc")
 
-    with Container("send") as cont:
-        conn = cont.connect(host, port)
-        sender = conn.open_sender("examples")
+        print(111, sender, receiver)
 
-        sender.send(message)
+        delivery = await sender.send(Message("hi"))
 
-        print("Sent {}".format(message))
+        print(112, delivery)
 
-def receive_once(host, port):
-    with Container("receive") as cont:
-        conn = cont.connect(host, port)
-        receiver = conn.open_receiver("examples")
+        await sender.close()
+        await receiver.close()
+        await conn.close()
 
-        delivery = receiver.receive()
+        print(222)
 
-        print("Received {}".format(delivery.message))
+# def send_once(host, port):
+#     message = Message("hello")
 
-def send_once_synchronously(host, port):
-    message = Message("hello")
+#     with Container("send") as cont:
+#         conn = cont.connect(host, port)
+#         sender = conn.open_sender("examples")
 
-    with Container("send") as cont:
-        conn = cont.connect(host, port)
-        sender = conn.open_sender("examples")
+#         sender.send(message)
 
-        tracker = sender.send(message)
-        tracker.await_delivery()
+#         print("Sent {}".format(message))
 
-        print("Sent {} ({})".format(tracker.message, tracker.state))
+# def receive_once(host, port):
+#     with Container("receive") as cont:
+#         conn = cont.connect(host, port)
+#         receiver = conn.open_receiver("examples")
 
-def receive_once_with_explicit_accept(host, port):
-    with Container("receive") as cont:
-        conn = cont.connect(host, port)
-        receiver = conn.open_receiver("examples", auto_accept=False)
+#         delivery = receiver.receive()
 
-        delivery = receiver.receive()
-        delivery.accept()
+#         print("Received {}".format(delivery.message))
 
-        print("Received {}".format(delivery.message))
+# def send_once_synchronously(host, port):
+#     message = Message("hello")
 
-def send_batch(host, port):
-    messages = [Message("hello-{}".format(x)) for x in range(3)]
-    trackers = list()
+#     with Container("send") as cont:
+#         conn = cont.connect(host, port)
+#         sender = conn.open_sender("examples")
 
-    with Container("send") as cont:
-        conn = cont.connect(host, port)
-        sender = conn.open_sender("examples")
+#         tracker = sender.send(message)
+#         tracker.await_delivery()
 
-        for message in messages:
-            tracker = sender.send(message)
-            trackers.append(tracker)
+#         print("Sent {} ({})".format(tracker.message, tracker.state))
 
-        for tracker in trackers:
-            tracker.await_delivery()
-            print("Sent {} ({})".format(tracker.message, tracker.state))
+# def receive_once_with_explicit_accept(host, port):
+#     with Container("receive") as cont:
+#         conn = cont.connect(host, port)
+#         receiver = conn.open_receiver("examples", auto_accept=False)
 
-def send_batch_with_delivery_callback(host, port):
-    messages = [Message("hello-{}".format(x)) for x in range(3)]
+#         delivery = receiver.receive()
+#         delivery.accept()
 
-    def on_delivery(tracker):
-        print("Sent {} ({})".format(tracker.message, tracker.state))
+#         print("Received {}".format(delivery.message))
 
-    with Container("send") as cont:
-        conn = cont.connect(host, port)
-        sender = conn.open_sender("examples")
+# def send_batch(host, port):
+#     messages = [Message("hello-{}".format(x)) for x in range(3)]
+#     trackers = list()
 
-        for message in messages:
-            sender.send(message, on_delivery=on_delivery)
+#     with Container("send") as cont:
+#         conn = cont.connect(host, port)
+#         sender = conn.open_sender("examples")
 
-def receive_batch(host, port):
-    with Container("receive") as cont:
-        conn = cont.connect(host, port)
-        receiver = conn.open_receiver("examples")
+#         for message in messages:
+#             tracker = sender.send(message)
+#             trackers.append(tracker)
 
-        for i in range(3):
-            delivery = receiver.receive()
-            print("Received {}".format(delivery.message))
+#         for tracker in trackers:
+#             tracker.await_delivery()
+#             print("Sent {} ({})".format(tracker.message, tracker.state))
 
-def send_indefinitely(host, port, stopping):
-    def on_delivery(tracker):
-        print("Sent {} ({})".format(tracker.message, tracker.state))
+# def send_batch_with_delivery_callback(host, port):
+#     messages = [Message("hello-{}".format(x)) for x in range(3)]
 
-    with Container("send") as cont:
-        conn = cont.connect(host, port)
-        sender = conn.open_sender("examples")
+#     def on_delivery(tracker):
+#         print("Sent {} ({})".format(tracker.message, tracker.state))
 
-        for i in xrange(sys.maxint):
-            message = Message("message-{}".format(i))
-            sender.send(message, on_delivery=on_delivery)
+#     with Container("send") as cont:
+#         conn = cont.connect(host, port)
+#         sender = conn.open_sender("examples")
 
-            if stopping.is_set(): break
+#         for message in messages:
+#             sender.send(message, on_delivery=on_delivery)
 
-def receive_indefinitely(host, port, stopping):
-    with Container("receive") as cont:
-        conn = cont.connect(host, port)
-        receiver = conn.open_receiver("examples")
+# def receive_batch(host, port):
+#     with Container("receive") as cont:
+#         conn = cont.connect(host, port)
+#         receiver = conn.open_receiver("examples")
 
-        for delivery in receiver:
-            print("Received {}".format(delivery.message))
+#         for i in range(3):
+#             delivery = receiver.receive()
+#             print("Received {}".format(delivery.message))
 
-            if stopping.is_set(): break
+# def send_indefinitely(host, port, stopping):
+#     def on_delivery(tracker):
+#         print("Sent {} ({})".format(tracker.message, tracker.state))
 
-def request_once(host, port):
-    with Container("request") as cont:
-        conn = cont.connect(host, port)
-        sender = conn.open_sender("requests")
-        receiver = conn.open_dynamic_receiver()
+#     with Container("send") as cont:
+#         conn = cont.connect(host, port)
+#         sender = conn.open_sender("examples")
 
-        request = Message("abc")
-        request.reply_to = receiver.source.address
+#         for i in xrange(sys.maxint):
+#             message = Message("message-{}".format(i))
+#             sender.send(message, on_delivery=on_delivery)
 
-        sender.send(request)
+#             if stopping.is_set(): break
 
-        delivery = receiver.receive()
+# def receive_indefinitely(host, port, stopping):
+#     with Container("receive") as cont:
+#         conn = cont.connect(host, port)
+#         receiver = conn.open_receiver("examples")
 
-        print("Sent {} and received {}".format(request, delivery.message))
+#         for delivery in receiver:
+#             print("Received {}".format(delivery.message))
 
-def respond_once(host, port):
-    with Container("respond") as cont:
-        conn = cont.connect(host, port)
-        receiver = conn.open_receiver("requests")
-        sender = conn.open_anonymous_sender()
+#             if stopping.is_set(): break
 
-        delivery = receiver.receive()
+# def request_once(host, port):
+#     with Container("request") as cont:
+#         conn = cont.connect(host, port)
+#         sender = conn.open_sender("requests")
+#         receiver = conn.open_dynamic_receiver()
 
-        response = Message(delivery.message.body.upper())
-        response.to = delivery.message.reply_to
+#         request = Message("abc")
+#         request.reply_to = receiver.source.address
 
-        tracker = sender.send(response)
-        tracker.await_delivery()
+#         sender.send(request)
 
-        print("Processed {} and sent {}".format(delivery.message, response))
+#         delivery = receiver.receive()
 
-def request_batch(host, port):
-    requests = [Message("request-{}".format(x)) for x in range(3)]
+#         print("Sent {} and received {}".format(request, delivery.message))
 
-    with Container("request") as cont:
-        conn = cont.connect(host, port)
-        sender = conn.open_sender("requests")
-        receiver = conn.open_dynamic_receiver()
+# def respond_once(host, port):
+#     with Container("respond") as cont:
+#         conn = cont.connect(host, port)
+#         receiver = conn.open_receiver("requests")
+#         sender = conn.open_anonymous_sender()
 
-        for request in requests:
-            request.reply_to = receiver.source.address
+#         delivery = receiver.receive()
 
-            sender.send(request)
+#         response = Message(delivery.message.body.upper())
+#         response.to = delivery.message.reply_to
 
-        for request in requests:
-            delivery = receiver.receive()
+#         tracker = sender.send(response)
+#         tracker.await_delivery()
 
-            print("Sent {} and received {}".format(request, delivery.message))
+#         print("Processed {} and sent {}".format(delivery.message, response))
 
-def respond_batch(host, port):
-    with Container("respond") as cont:
-        conn = cont.connect(host, port)
-        receiver = conn.open_receiver("requests")
+# def request_batch(host, port):
+#     requests = [Message("request-{}".format(x)) for x in range(3)]
 
-        for i in range(3):
-            delivery = receiver.receive()
+#     with Container("request") as cont:
+#         conn = cont.connect(host, port)
+#         sender = conn.open_sender("requests")
+#         receiver = conn.open_dynamic_receiver()
 
-            response = Message(delivery.message.body.upper())
-            response.to = delivery.message.reply_to
+#         for request in requests:
+#             request.reply_to = receiver.source.address
 
-            conn.send(response)
+#             sender.send(request)
 
-            print("Processed {} and sent {}".format(delivery.message, response))
+#         for request in requests:
+#             delivery = receiver.receive()
 
-def main():
+#             print("Sent {} and received {}".format(request, delivery.message))
+
+# def respond_batch(host, port):
+#     with Container("respond") as cont:
+#         conn = cont.connect(host, port)
+#         receiver = conn.open_receiver("requests")
+
+#         for i in range(3):
+#             delivery = receiver.receive()
+
+#             response = Message(delivery.message.body.upper())
+#             response.to = delivery.message.reply_to
+
+#             conn.send(response)
+
+#             print("Processed {} and sent {}".format(delivery.message, response))
+
+async def main():
     try:
         host, port = sys.argv[1:3]
         port = int(port)
     except:
         sys.exit("Usage: demo HOST PORT")
 
+    conn_url = f"amqp://{host}:{port}"
+
+    await endpoints(conn_url)
+
     # Send and receive once
 
-    send_once(host, port)
-    receive_once(host, port)
+    # send_once(host, port)
+    # receive_once(host, port)
 
-    # Send and receive once, sending synchronously and using explicit acks
+    # # Send and receive once, sending synchronously and using explicit acks
 
-    send_once_synchronously(host, port)
-    receive_once_with_explicit_accept(host, port)
+    # send_once_synchronously(host, port)
+    # receive_once_with_explicit_accept(host, port)
 
-    # Send and receive a batch of three
+    # # Send and receive a batch of three
 
-    send_batch(host, port)
-    receive_batch(host, port)
+    # send_batch(host, port)
+    # receive_batch(host, port)
 
-    # Send and receive a batch of three using the delivery callback
+    # # Send and receive a batch of three using the delivery callback
 
-    send_batch_with_delivery_callback(host, port)
-    receive_batch(host, port)
+    # send_batch_with_delivery_callback(host, port)
+    # receive_batch(host, port)
 
-    # Send and receive indefinitely
+    # # Send and receive indefinitely
 
-    stopping = threading.Event()
+    # stopping = threading.Event()
 
-    send_thread = threading.Thread(target=send_indefinitely, args=(host, port, stopping))
-    send_thread.start()
+    # send_thread = threading.Thread(target=send_indefinitely, args=(host, port, stopping))
+    # send_thread.start()
 
-    receive_thread = threading.Thread(target=receive_indefinitely, args=(host, port, stopping))
-    receive_thread.start()
+    # receive_thread = threading.Thread(target=receive_indefinitely, args=(host, port, stopping))
+    # receive_thread.start()
 
-    time.sleep(0.02)
-    stopping.set()
+    # time.sleep(0.02)
+    # stopping.set()
 
-    send_thread.join()
-    receive_thread.join()
+    # send_thread.join()
+    # receive_thread.join()
 
-    # Request and respond once
+    # # Request and respond once
 
-    respond_thread = threading.Thread(target=respond_once, args=(host, port))
-    respond_thread.start()
+    # respond_thread = threading.Thread(target=respond_once, args=(host, port))
+    # respond_thread.start()
 
-    request_once(host, port)
+    # request_once(host, port)
 
-    respond_thread.join()
+    # respond_thread.join()
 
-    # Request and respond in a batch of three
+    # # Request and respond in a batch of three
 
-    respond_thread = threading.Thread(target=respond_batch, args=(host, port))
-    respond_thread.start()
+    # respond_thread = threading.Thread(target=respond_batch, args=(host, port))
+    # respond_thread.start()
 
-    request_batch(host, port)
+    # request_batch(host, port)
 
-    respond_thread.join()
+    # respond_thread.join()
 
 if __name__ == "__main__":
     try:
-        main()
+        asyncio.run(main())
     except KeyboardInterrupt:
         pass

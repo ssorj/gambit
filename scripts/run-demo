@@ -1,4 +1,4 @@
-#!/usr/bin/python2
+#!/usr/bin/python3
 #
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
@@ -52,4 +52,4 @@ class TestBroker(object):
             print("> {}".format(line[:-1]))
 
 with TestBroker() as broker:
-    call("python -m demo {} {}", broker.host, broker.port)
+    call("python3 -m demo {} {}", broker.host, broker.port)

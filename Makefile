@@ -20,7 +20,7 @@
 export PYTHONPATH := ${CURDIR}/python:${PYTHONPATH}
 
 .PHONY: default
-default: clean demo docs
+default: clean demo
 	@echo SUCCESS
 
 .PHONY: demo
