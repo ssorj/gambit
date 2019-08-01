@@ -25,24 +25,18 @@ import time
 
 from gambit import *
 
-async def endpoints(conn_url):
-    with Container("endpoints-1") as client:
+async def testing(conn_url):
+    async with Client("endpoints-1") as client:
         conn = await client.connect(conn_url)
-        #session = await conn.open_session()
         sender = await conn.open_sender("abc")
         receiver = await conn.open_receiver("abc")
 
-        print(111, sender, receiver)
-
-        delivery = await sender.send(Message("hi"))
-
-        print(112, delivery)
+        tracker = await sender.send(Message("hi"))
+        #delivery = await receiver.receive()
 
         await sender.close()
         await receiver.close()
         await conn.close()
-
-        print(222)
 
 # def send_once(host, port):
 #     message = Message("hello")
@@ -221,7 +215,7 @@ async def main():
 
     conn_url = f"amqp://{host}:{port}"
 
-    await endpoints(conn_url)
+    await testing(conn_url)
 
     # Send and receive once
 

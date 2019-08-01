@@ -30,26 +30,26 @@ import proton.reactor as _reactor
 
 _log_mutex = _threading.Lock()
 
-class Container:
+class Client:
     def __init__(self, id=None):
-        self._pn_object = _reactor.Container(_Handler(self))
+        self._pn_container = _reactor.Container(_Handler(self))
 
         if id is not None:
-            self._pn_object.container_id = id
+            self._pn_container.container_id = id
 
         self._operations = _queue.Queue()
         self._worker_thread = _WorkerThread(self)
         self._lock = _threading.Lock()
 
         self._event_injector = _reactor.EventInjector()
-        self._pn_object.selectable(self._event_injector)
+        self._pn_container.selectable(self._event_injector)
 
         # proton endpoint => gambit endpoint
         self._endpoints = dict()
 
         self._connections = set()
 
-    def __enter__(self):
+    async def __aenter__(self):
         _threading.current_thread().name = "user"
 
         with self._lock:
@@ -57,30 +57,29 @@ class Container:
 
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.stop()
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        await self.stop()
 
-    def stop(self, timeout=None):
+    async def stop(self, timeout=None):
         """
         Close any open connections and stop the container.  Blocks until all connections are closed.
         """
 
         # XXX Implement timeout
 
+        # Use asyncio.wait? XXX
         for conn in self._connections:
-            conn.close()
+            await conn.close()
 
-        for conn in self._connections:
-            conn.await_close()
-
-        self._worker_thread.stop()
+        with self._lock:
+            self._worker_thread.stop()
 
     @property
     def id(self):
         """
         The unique identity of the container.
         """
-        return self._pn_object.container_id
+        return self._pn_container.container_id
 
     def _fire_event(self, event_name, *args):
         future = _asyncio.get_event_loop().create_future()
@@ -90,7 +89,7 @@ class Container:
 
         return future
 
-    def connect(self, conn_url, **options):
+    async def connect(self, conn_url, **options):
         """
         Initiate connection open.
         Use :meth:`Connection.await_open()` to block until the remote peer confirms the open.
@@ -104,7 +103,7 @@ class Container:
             if not self._worker_thread.is_alive():
                 self._worker_thread.start()
 
-        return self._fire_event("gambit_connect", conn_url)
+        return await self._fire_event("gambit_connect", conn_url)
 
     def _log(self, message, *args):
         with _log_mutex:
@@ -115,43 +114,42 @@ class Container:
             _sys.stdout.flush()
 
 class _Object:
-    def __init__(self, container, proton_object):
-        self.container = container
-        self._pn_object = proton_object
+    def __init__(self, client, pn_object):
+        self.client = client
+        self._pn_object = pn_object
 
     def __repr__(self):
         return "{}({})".format(self.__class__.__name__, self._pn_object)
 
 class _Endpoint(_Object):
-    def __init__(self, container, proton_object, open_operation):
-        super(_Endpoint, self).__init__(container, proton_object)
+    def __init__(self, container, pn_object):
+        super(_Endpoint, self).__init__(container, pn_object)
 
-        self.container._endpoints[self._pn_object] = self
+        self.client._endpoints[self._pn_object] = self
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(self, exc_type, exc_value, traceback):
         self.close()
 
-    def close(self, error_condition=None):
+    async def close(self, error_condition=None):
         """
         Initiate close.
-        Use :meth:`await_close()` to block until the remote peer confirms the close.
         """
 
-        return self.container._fire_event("gambit_close_endpoint", self._pn_object)
+        return await self.client._fire_event("gambit_close_endpoint", self._pn_object)
 
 class Connection(_Endpoint):
-    def __init__(self, container, pn_object, open_operation):
-        super(Connection, self).__init__(container, pn_object, open_operation)
+    def __init__(self, container, pn_object):
+        super(Connection, self).__init__(container, pn_object)
 
         self._default_sender = None
 
-    def open_session(self, **options):
-        return self.container._fire_event("gambit_open_session", self._pn_object)
+    async def open_session(self, **options):
+        return await self.client._fire_event("gambit_open_session", self._pn_object)
 
-    def open_sender(self, address, **options):
+    async def open_sender(self, address, **options):
         """
         Initiate sender open.
         XXX Use :meth:`Sender.await_open()` to block until the remote peer confirms the open.
@@ -161,9 +159,9 @@ class Connection(_Endpoint):
 
         assert address is not None
 
-        return self.container._fire_event("gambit_open_sender", self._pn_object, address)
+        return await self.client._fire_event("gambit_open_sender", self._pn_object, address)
 
-    def open_receiver(self, address, on_message=None, **options):
+    async def open_receiver(self, address, on_message=None, **options):
         """
         Initiate receiver open.
         Use :meth:`Receiver.await_open()` to block until the remote peer confirms the open.
@@ -177,9 +175,9 @@ class Connection(_Endpoint):
 
         assert address is not None
 
-        return self.container._fire_event("gambit_open_receiver", self._pn_object, address)
+        return await self.client._fire_event("gambit_open_receiver", self._pn_object, address)
 
-    def open_anonymous_sender(self, **options):
+    async def open_anonymous_sender(self, **options):
         """
         Initiate open of an unnamed sender.
         See :meth:`open_sender()`.
@@ -189,7 +187,7 @@ class Connection(_Endpoint):
 
         raise NotImplementedError()
 
-    def open_dynamic_receiver(self, timeout=None, **options):
+    async def open_dynamic_receiver(self, timeout=None, **options):
         """
         Open a sender with a dynamic source address supplied by the remote peer.
         See :meth:`open_receiver()`.
@@ -203,7 +201,7 @@ class Connection(_Endpoint):
         raise NotImplementedError()
 
     @property
-    def default_session(self):
+    async def default_session(self):
         """
         The default session.
         """
@@ -214,12 +212,12 @@ class Session(_Endpoint):
     pass
 
 class _Link(_Endpoint):
-    def __init__(self, container, proton_object, open_operation):
-        super(_Link, self).__init__(container, proton_object, open_operation)
+    def __init__(self, container, pn_object):
+        super(_Link, self).__init__(container, pn_object)
 
-        self._connection = self.container._endpoints[self._pn_object.connection]
-        self._target = Target(self.container, self._pn_object.remote_target)
-        self._source = Source(self.container, self._pn_object.remote_source)
+        self._connection = self.client._endpoints[self._pn_object.connection]
+        self._target = Target(self.client, self._pn_object.remote_target)
+        self._source = Source(self.client, self._pn_object.remote_source)
 
     @property
     def connection(self):
@@ -246,11 +244,11 @@ class _Link(_Endpoint):
         return self._target
 
 class Sender(_Link):
-    def __init__(self, container, proton_object, open_operation):
-        super(Sender, self).__init__(container, proton_object, open_operation)
+    def __init__(self, container, pn_object):
+        super(Sender, self).__init__(container, pn_object)
 
-        self._connection = self.container._endpoints[self._pn_object.connection]
-        self._target = Target(self.container, self._pn_object.remote_target)
+        self._connection = self.client._endpoints[self._pn_object.connection]
+        self._target = Target(self.client, self._pn_object.remote_target)
 
         # self._message_queue = _queue.Queue() # XXX this may come back for blocking
 
@@ -269,7 +267,9 @@ class Sender(_Link):
         :rtype: Tracker
         """
 
-        return self.container._fire_event("gambit_send", self._pn_object, message)
+        # await self.sendable()
+
+        return self.client._fire_event("gambit_send", self._pn_object, message)
 
     def try_send(self, message, on_delivery=None):
         """
@@ -297,8 +297,8 @@ class Receiver(_Link):
     Each item returned during iteration is a delivery obtained by calling `receive()`.
     """
 
-    def __init__(self, container, proton_object, open_operation):
-        super(Receiver, self).__init__(container, proton_object, open_operation)
+    def __init__(self, container, pn_object):
+        super(Receiver, self).__init__(container, pn_object)
 
         self._delivery_queue = _queue.Queue()
 
@@ -311,8 +311,10 @@ class Receiver(_Link):
         :rtype: Delivery
         """
 
+        return self.client._fire_event("gambit_receive", self._pn_object)
+
         pn_delivery, pn_message = self._delivery_queue.get()
-        return Delivery(self.container, pn_delivery, pn_message)
+        return Delivery(self.client, pn_delivery, pn_message)
 
     def try_receive(self):
         """
@@ -353,8 +355,8 @@ class Target(_Terminus):
     pass
 
 class _Transfer(_Object):
-    def __init__(self, container, proton_object, message):
-        super(_Transfer, self).__init__(container, proton_object)
+    def __init__(self, container, pn_object, message):
+        super(_Transfer, self).__init__(container, pn_object)
 
         self._message = message
 
@@ -378,8 +380,8 @@ class _Transfer(_Object):
         """
 
 class Tracker(_Transfer):
-    def __init__(self, container, proton_object, message):
-        super(Tracker, self).__init__(container, proton_object, message)
+    def __init__(self, container, pn_object, message):
+        super(Tracker, self).__init__(container, pn_object, message)
 
         self._message_delivered = _threading.Event()
 
@@ -479,83 +481,73 @@ class ConversionError(Error):
     """
 
 class _WorkerThread(_threading.Thread):
-    def __init__(self, container):
+    def __init__(self, client):
         _threading.Thread.__init__(self)
 
-        self.container = container
+        self.client = client
         self.name = "worker"
         self.daemon = True
 
     def start(self):
-        self.container._log("Starting the worker thread")
+        self.client._log("Starting the worker thread")
+
 
         _threading.Thread.start(self)
 
     def run(self):
         try:
-            self.container._pn_object.run()
+            self.client._pn_container.run()
         except KeyboardInterrupt:
             raise
 
     def stop(self):
-        self.container._log("Stopping the worker thread")
+        self.client._log("Stopping the worker thread")
 
-        self.container._pn_object.stop()
+        self.client._pn_container.stop()
 
 class _Handler(_handlers.MessagingHandler):
-    def __init__(self, container):
+    def __init__(self, client):
         super(_Handler, self).__init__()
 
-        self.container = container
+        self.client = client
 
-        # XXX
-        self.pending_futures = dict()
-
-        # (operation class, proton endpoint) => operation
-        self.pending_operations = dict()
         # proton delivery => (proton_message, on_delivery)
         self.pending_deliveries = dict()
 
+    # Connection opening
+
     def on_gambit_connect(self, event):
         future, conn_url = event.subject
-        self.container._pn_object.connect(conn_url, allowed_mechs="ANONYMOUS").__future = future
+        self.client._pn_container.connect(conn_url, allowed_mechs="ANONYMOUS").__future = future
 
     def on_connection_opened(self, event):
         future = event.connection.__future
-        conn = Connection(self.container, event.connection, None)
+        conn = Connection(self.client, event.connection)
         future.get_loop().call_soon_threadsafe(lambda: future.set_result(conn))
 
-    # def on_gambit_open_session(self, event):
-    #     print(333)
-    #     pn_conn, future = event.subject
-    #     pn_conn.session().__future = future
-    #     print(444)
-    #
-    # def on_session_opened(self, event):
-    #     print(222)
-    #     future = event.session.__future
-    #     session = Session(self.container, event.session, None)
-    #     future.get_loop().call_soon_threadsafe(lambda: future.set_result(session))
+    # Link opening
 
     def on_gambit_open_sender(self, event):
         future, pn_conn, address = event.subject
-        self.container._pn_object.create_sender(pn_conn, address).__future = future
+        self.client._pn_container.create_sender(pn_conn, address).__future = future
 
     def on_gambit_open_receiver(self, event):
         future, pn_conn, address = event.subject
         dynamic = address is None
-        self.container._pn_object.create_receiver(pn_conn, address, dynamic=dynamic).__future = future
+        self.client._pn_container.create_receiver(pn_conn, address, dynamic=dynamic).__future = future
 
     def on_link_opened(self, event):
         if event.link.is_sender:
             future = event.link.__future
-            sender = Sender(self.container, event.link, None)
+            sender = Sender(self.client, event.link)
             future.get_loop().call_soon_threadsafe(lambda: future.set_result(sender))
 
         if event.link.is_receiver:
             future = event.link.__future
-            receiver = Receiver(self.container, event.link, None)
+            receiver = Receiver(self.client, event.link)
             future.get_loop().call_soon_threadsafe(lambda: future.set_result(receiver))
+
+    # Endpoint closing
 
     def on_gambit_close_endpoint(self, event):
         future, pn_endpoint = event.subject
@@ -574,13 +566,15 @@ class _Handler(_handlers.MessagingHandler):
         future = event.link.__future
         future.get_loop().call_soon_threadsafe(lambda: future.set_result(None))
 
+    # Sending
+
     def on_gambit_send(self, event):
         future, pn_sender, message = event.subject
         pn_sender.send(message).__future = future
 
     def on_acknowledged(self, event):
         future = event.delivery.__future
-        tracker = Tracker(self.container, event.delivery, event.message)
+        tracker = Tracker(self.client, event.delivery, event.message)
         future.get_loop().call_soon_threadsafe(lambda: future.set_result(tracker))
 
     def on_accepted(self, event):
@@ -592,6 +586,12 @@ class _Handler(_handlers.MessagingHandler):
     def on_released(self, event):
         self.on_acknowledged(event)
 
+    # Receiving
+
+    def on_gambit_receive(self, event):
+        future, pn_receiver = event.subject
+        pn_receiver.flow(1) # XXX no future
+
     # def on_sendable(self, event):
     #     self.send_messages(event.sender)
 
@@ -599,7 +599,7 @@ class _Handler(_handlers.MessagingHandler):
     #     self.send_messages(event.subject)
 
     # def send_messages(self, sender):
-    #     gb_sender = self.container._endpoints[sender]
+    #     gb_sender = self.client._endpoints[sender]
     #     queue = gb_sender._message_queue
     #     port = gb_sender._tracker_port
 
@@ -607,42 +607,12 @@ class _Handler(_handlers.MessagingHandler):
     #         message, on_delivery = queue.get()
 
     #         delivery = sender.send(message)
-    #         tracker = Tracker(self.container, delivery, message)
+    #         tracker = Tracker(self.client, delivery, message)
 
     #         port.put(tracker)
 
     #         self.pending_deliveries[delivery] = (tracker, on_delivery)
 
     def on_message(self, event):
-        gb_receiver = self.container._endpoints[event.receiver]
+        gb_receiver = self.client._endpoints[event.receiver]
         gb_receiver._delivery_queue.put((event.delivery, event.message))
-
-class _ReturnPort(object):
-    def __init__(self):
-        self.value = None
-
-        self.lock = _threading.Lock()
-        self.empty = _threading.Condition(self.lock)
-        self.full = _threading.Condition(self.lock)
-
-    def put(self, value):
-        assert value is not None
-
-        with self.empty:
-            while self.value is not None:
-                self.empty.wait()
-
-            self.value = value
-            self.full.notify()
-
-    def get(self):
-        with self.full:
-            while self.value is None:
-                self.full.wait()
-
-            value = self.value
-            self.value = None
-
-            self.empty.notify()
-
-            return value
