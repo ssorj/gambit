@@ -34,6 +34,8 @@ class Client:
         if id is not None:
             self._pn_container.container_id = id
 
+        self._loop = _asyncio.get_event_loop()
+
         self._worker_thread = _WorkerThread(self)
         self._lock = _threading.Lock()
 
@@ -58,7 +60,7 @@ class Client:
         Close any open connections and stop the container.  Blocks until all connections are closed.
         """
 
-        if self._connections and _asyncio.get_event_loop().is_running():
+        if self._connections and self._loop.is_running():
             done, pending = await _asyncio.wait([x.close() for x in self._connections], timeout=timeout)
 
             if pending:
@@ -75,7 +77,7 @@ class Client:
         return self._pn_container.container_id
 
     def _fire_event(self, event_name, *args):
-        future = _asyncio.get_event_loop().create_future()
+        future = self._loop.create_future()
         event = _reactor.ApplicationEvent(event_name, subject=(future, *args))
 
         self._event_injector.trigger(event)
@@ -85,7 +87,6 @@ class Client:
     async def connect(self, conn_url, **options):
         """
         Initiate connection open.
-        Use :meth:`Connection.await_open()` to block until the remote peer confirms the open.
 
         :rtype: Connection
         """
@@ -143,14 +144,11 @@ class Connection(_Endpoint):
         :rtype: Sender
         """
 
-        assert address is not None
-
         return await self.client._fire_event("gb_open_sender", self._pn_object, address)
 
     async def open_receiver(self, address, on_message=None, **options):
         """
         Initiate receiver open.
-        Use :meth:`Receiver.await_open()` to block until the remote peer confirms the open.
 
         If set, `on_message(delivery)` is called when a message is received.
         It is called on another thread, not the main API thread.
@@ -158,8 +156,6 @@ class Connection(_Endpoint):
 
         :rtype: Receiver
         """
-
-        assert address is not None
 
         return await self.client._fire_event("gb_open_receiver", self._pn_object, address)
 
@@ -171,20 +167,17 @@ class Connection(_Endpoint):
         :rtype: Sender
         """
 
-        raise NotImplementedError()
+        return await self.open_sender(None, **options)
 
     async def open_dynamic_receiver(self, timeout=None, **options):
         """
         Open a sender with a dynamic source address supplied by the remote peer.
         See :meth:`open_receiver()`.
 
-        REVIEW: Unlike the other open methods, this one blocks until the remote peer
-        confirms the open and supplies the source address.
-
         :rtype: Receiver
         """
 
-        return self.open_receiver(None, timeout=timeout, **options)
+        return await self.open_receiver(None, timeout=timeout, **options)
 
     @property
     async def default_session(self):
@@ -235,8 +228,6 @@ class Sender(_Link):
         Send a message.
 
         Blocks until credit is available and the message can be sent.
-        Use :meth:`Tracker.await_delivery()` to block until the remote peer acknowledges
-        the message.
 
         If set, `on_delivery(tracker)` is called after the delivery is acknowledged.
         It is called on another thread, not the main API thread.
@@ -254,8 +245,7 @@ class Sender(_Link):
         Send a message without blocking for credit.
 
         If there is credit, the message is sent and a tracker is
-        returned.  Use :meth:`Tracker.await_delivery()` to block until
-        the remote peer acknowledges the message.
+        returned.
 
         If no credit is available, the method immediately returns
         `None`.
@@ -279,13 +269,10 @@ class Receiver(_Link):
         super(Receiver, self).__init__(client, pn_object)
 
         self._deliveries = _asyncio.Queue(loop=event_loop)
-        self._lock = _threading.Lock()
 
     async def receive(self, timeout=None):
         """
         Receive a delivery containing a message.  Blocks until a message is available.
-
-        CONSIDER: Flow one credit if credit is zero for a more convenient no-prefetch mode.
 
         :rtype: Delivery
         """
@@ -479,9 +466,6 @@ class _MessagingHandler(_handlers.MessagingHandler):
 
         self.client = client
 
-        # proton delivery => (proton_message, on_delivery)
-        self.pending_deliveries = dict()
-
     # Connection opening
 
     def on_gb_connect(self, event):
@@ -535,9 +519,7 @@ class _MessagingHandler(_handlers.MessagingHandler):
         pn_delivery.__message = message
 
     def on_acknowledged(self, event):
-        future = event.delivery.__future
-        tracker = Tracker(self.client, event.delivery, event.delivery.__message)
-        _set_result(future, tracker)
+        _set_result(event.delivery.__future, Tracker(self.client, event.delivery, event.delivery.__message))
 
     def on_accepted(self, event):
         self.on_acknowledged(event)
@@ -562,8 +544,7 @@ class _MessagingHandler(_handlers.MessagingHandler):
         receiver = event.receiver._gb_object
         delivery = Delivery(self.client, event.delivery, event.message)
 
-        with receiver._lock:
-            receiver._deliveries.put_nowait(delivery)
+        self.client._loop.call_soon_threadsafe(receiver._deliveries.put_nowait, delivery)
 
 def _set_result(future, result):
     future._loop.call_soon_threadsafe(future.set_result, result)
