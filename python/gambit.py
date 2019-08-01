@@ -18,11 +18,8 @@
 #
 
 import asyncio as _asyncio
-import collections as _collections
-import queue as _queue
 import sys as _sys
 import threading as _threading
-import traceback as _traceback
 
 import proton as _proton
 import proton.handlers as _handlers
@@ -32,20 +29,16 @@ _log_mutex = _threading.Lock()
 
 class Client:
     def __init__(self, id=None):
-        self._pn_container = _reactor.Container(_Handler(self))
+        self._pn_container = _reactor.Container(_MessagingHandler(self))
 
         if id is not None:
             self._pn_container.container_id = id
 
-        self._operations = _queue.Queue()
         self._worker_thread = _WorkerThread(self)
         self._lock = _threading.Lock()
 
         self._event_injector = _reactor.EventInjector()
         self._pn_container.selectable(self._event_injector)
-
-        # proton endpoint => gambit endpoint
-        self._endpoints = dict()
 
         self._connections = set()
 
@@ -65,11 +58,11 @@ class Client:
         Close any open connections and stop the container.  Blocks until all connections are closed.
         """
 
-        # XXX Implement timeout
+        if self._connections:
+            done, pending = await _asyncio.wait([x.close() for x in self._connections], timeout=timeout)
 
-        # Use asyncio.wait? XXX
-        for conn in self._connections:
-            await conn.close()
+            if pending:
+                raise TimeoutError()
 
         with self._lock:
             self._worker_thread.stop()
@@ -103,7 +96,7 @@ class Client:
             if not self._worker_thread.is_alive():
                 self._worker_thread.start()
 
-        return await self._fire_event("gambit_connect", conn_url)
+        return await self._fire_event("gb_connect", conn_url)
 
     def _log(self, message, *args):
         with _log_mutex:
@@ -118,36 +111,30 @@ class _Object:
         self.client = client
         self._pn_object = pn_object
 
+        pn_object._gb_object = self
+
     def __repr__(self):
         return "{}({})".format(self.__class__.__name__, self._pn_object)
 
 class _Endpoint(_Object):
-    def __init__(self, container, pn_object):
-        super(_Endpoint, self).__init__(container, pn_object)
-
-        self.client._endpoints[self._pn_object] = self
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        self.close()
-
     async def close(self, error_condition=None):
         """
         Initiate close.
         """
 
-        return await self.client._fire_event("gambit_close_endpoint", self._pn_object)
+        if self._pn_object.state & self._pn_object.LOCAL_CLOSED:
+            return
+
+        return await self.client._fire_event("gb_close_endpoint", self._pn_object)
 
 class Connection(_Endpoint):
-    def __init__(self, container, pn_object):
-        super(Connection, self).__init__(container, pn_object)
+    def __init__(self, client, pn_object):
+        super(Connection, self).__init__(client, pn_object)
 
-        self._default_sender = None
+        self.client._connections.add(self)
 
     async def open_session(self, **options):
-        return await self.client._fire_event("gambit_open_session", self._pn_object)
+        return await self.client._fire_event("gb_open_session", self._pn_object)
 
     async def open_sender(self, address, **options):
         """
@@ -159,7 +146,7 @@ class Connection(_Endpoint):
 
         assert address is not None
 
-        return await self.client._fire_event("gambit_open_sender", self._pn_object, address)
+        return await self.client._fire_event("gb_open_sender", self._pn_object, address)
 
     async def open_receiver(self, address, on_message=None, **options):
         """
@@ -175,7 +162,7 @@ class Connection(_Endpoint):
 
         assert address is not None
 
-        return await self.client._fire_event("gambit_open_receiver", self._pn_object, address)
+        return await self.client._fire_event("gb_open_receiver", self._pn_object, address)
 
     async def open_anonymous_sender(self, **options):
         """
@@ -212,10 +199,10 @@ class Session(_Endpoint):
     pass
 
 class _Link(_Endpoint):
-    def __init__(self, container, pn_object):
-        super(_Link, self).__init__(container, pn_object)
+    def __init__(self, client, pn_object):
+        super(_Link, self).__init__(client, pn_object)
 
-        self._connection = self.client._endpoints[self._pn_object.connection]
+        self._connection = self._pn_object.connection._gb_object
         self._target = Target(self.client, self._pn_object.remote_target)
         self._source = Source(self.client, self._pn_object.remote_source)
 
@@ -244,15 +231,7 @@ class _Link(_Endpoint):
         return self._target
 
 class Sender(_Link):
-    def __init__(self, container, pn_object):
-        super(Sender, self).__init__(container, pn_object)
-
-        self._connection = self.client._endpoints[self._pn_object.connection]
-        self._target = Target(self.client, self._pn_object.remote_target)
-
-        # self._message_queue = _queue.Queue() # XXX this may come back for blocking
-
-    def send(self, message, timeout=None, on_delivery=None):
+    async def send(self, message, timeout=None, on_delivery=None):
         """
         Send a message.
 
@@ -269,7 +248,7 @@ class Sender(_Link):
 
         # await self.sendable()
 
-        return self.client._fire_event("gambit_send", self._pn_object, message)
+        return await self.client._fire_event("gb_send", self._pn_object, message)
 
     def try_send(self, message, on_delivery=None):
         """
@@ -297,12 +276,13 @@ class Receiver(_Link):
     Each item returned during iteration is a delivery obtained by calling `receive()`.
     """
 
-    def __init__(self, container, pn_object):
-        super(Receiver, self).__init__(container, pn_object)
+    def __init__(self, client, pn_object, event_loop):
+        super(Receiver, self).__init__(client, pn_object)
 
-        self._delivery_queue = _queue.Queue()
+        self._deliveries = _asyncio.Queue(loop=event_loop)
+        self._lock = _threading.Lock()
 
-    def receive(self, timeout=None):
+    async def receive(self, timeout=None):
         """
         Receive a delivery containing a message.  Blocks until a message is available.
 
@@ -311,10 +291,10 @@ class Receiver(_Link):
         :rtype: Delivery
         """
 
-        return self.client._fire_event("gambit_receive", self._pn_object)
+        await self.client._fire_event("gb_receive", self._pn_object)
 
-        pn_delivery, pn_message = self._delivery_queue.get()
-        return Delivery(self.client, pn_delivery, pn_message)
+        with self._lock:
+            return await self._deliveries.get()
 
     def try_receive(self):
         """
@@ -355,8 +335,8 @@ class Target(_Terminus):
     pass
 
 class _Transfer(_Object):
-    def __init__(self, container, pn_object, message):
-        super(_Transfer, self).__init__(container, pn_object)
+    def __init__(self, client, pn_object, message):
+        super(_Transfer, self).__init__(client, pn_object)
 
         self._message = message
 
@@ -367,6 +347,14 @@ class _Transfer(_Object):
         """
 
         return self._message
+
+    @property
+    def state(self):
+        """
+        The state of the transfer as reported by the remote peer.
+        """
+
+        return self._pn_object.remote_state
 
     def settle(self):
         """
@@ -380,19 +368,6 @@ class _Transfer(_Object):
         """
 
 class Tracker(_Transfer):
-    def __init__(self, container, pn_object, message):
-        super(Tracker, self).__init__(container, pn_object, message)
-
-        self._message_delivered = _threading.Event()
-
-    @property
-    def state(self):
-        """
-        The state of the delivery as reported by the remote peer.
-        """
-
-        return self._pn_object.remote_state
-
     @property
     def sender(self):
         """
@@ -400,6 +375,12 @@ class Tracker(_Transfer):
         """
 
 class Delivery(_Transfer):
+    @property
+    def receiver(self):
+        """
+        The receiver containing this delivery.
+        """
+
     def accept(self):
         """
         Tell the remote peer the delivery is accepted.
@@ -413,12 +394,6 @@ class Delivery(_Transfer):
     def release(self):
         """
         Tell the remote peer the delivery is released.
-        """
-
-    @property
-    def receiver(self):
-        """
-        The receiver containing this delivery.
         """
 
 class Message(_proton.Message):
@@ -491,7 +466,6 @@ class _WorkerThread(_threading.Thread):
     def start(self):
         self.client._log("Starting the worker thread")
 
-
         _threading.Thread.start(self)
 
     def run(self):
@@ -505,9 +479,9 @@ class _WorkerThread(_threading.Thread):
 
         self.client._pn_container.stop()
 
-class _Handler(_handlers.MessagingHandler):
+class _MessagingHandler(_handlers.MessagingHandler):
     def __init__(self, client):
-        super(_Handler, self).__init__()
+        super(_MessagingHandler, self).__init__()
 
         self.client = client
 
@@ -516,66 +490,60 @@ class _Handler(_handlers.MessagingHandler):
 
     # Connection opening
 
-    def on_gambit_connect(self, event):
+    def on_gb_connect(self, event):
         future, conn_url = event.subject
         self.client._pn_container.connect(conn_url, allowed_mechs="ANONYMOUS").__future = future
 
     def on_connection_opened(self, event):
-        future = event.connection.__future
-        conn = Connection(self.client, event.connection)
-        future.get_loop().call_soon_threadsafe(lambda: future.set_result(conn))
+        _set_result(event.connection.__future, Connection(self.client, event.connection))
 
     # Link opening
 
-    def on_gambit_open_sender(self, event):
+    def on_gb_open_sender(self, event):
         future, pn_conn, address = event.subject
         self.client._pn_container.create_sender(pn_conn, address).__future = future
 
-    def on_gambit_open_receiver(self, event):
+    def on_gb_open_receiver(self, event):
         future, pn_conn, address = event.subject
         dynamic = address is None
         self.client._pn_container.create_receiver(pn_conn, address, dynamic=dynamic).__future = future
 
     def on_link_opened(self, event):
         if event.link.is_sender:
-            future = event.link.__future
-            sender = Sender(self.client, event.link)
-            future.get_loop().call_soon_threadsafe(lambda: future.set_result(sender))
+            _set_result(event.link.__future, Sender(self.client, event.link))
 
         if event.link.is_receiver:
             future = event.link.__future
-            receiver = Receiver(self.client, event.link)
-            future.get_loop().call_soon_threadsafe(lambda: future.set_result(receiver))
+            _set_result(future, Receiver(self.client, event.link, future.get_loop()))
 
     # Endpoint closing
 
-    def on_gambit_close_endpoint(self, event):
+    def on_gb_close_endpoint(self, event):
         future, pn_endpoint = event.subject
         pn_endpoint.close()
         pn_endpoint.__future = future
 
     def on_connection_closed(self, event):
-        future = event.connection.__future
-        future.get_loop().call_soon_threadsafe(lambda: future.set_result(None))
+        _set_result(event.connection.__future, None)
 
     def on_session_closed(self, event):
-        future = event.session.__future
-        future.get_loop().call_soon_threadsafe(lambda: future.set_result(None))
+        _set_result(event.session.__future, None)
 
     def on_link_closed(self, event):
-        future = event.link.__future
-        future.get_loop().call_soon_threadsafe(lambda: future.set_result(None))
+        _set_result(event.link.__future, None)
 
     # Sending
 
-    def on_gambit_send(self, event):
+    def on_gb_send(self, event):
         future, pn_sender, message = event.subject
-        pn_sender.send(message).__future = future
+        pn_delivery = pn_sender.send(message)
+        pn_delivery.__future = future
+        pn_delivery.__message = message
 
     def on_acknowledged(self, event):
         future = event.delivery.__future
-        tracker = Tracker(self.client, event.delivery, event.message)
-        future.get_loop().call_soon_threadsafe(lambda: future.set_result(tracker))
+        tracker = Tracker(self.client, event.delivery, event.delivery.__message)
+        _set_result(future, tracker)
 
     def on_accepted(self, event):
         self.on_acknowledged(event)
@@ -588,31 +556,20 @@ class _Handler(_handlers.MessagingHandler):
 
     # Receiving
 
-    def on_gambit_receive(self, event):
+    def on_gb_receive(self, event):
         future, pn_receiver = event.subject
-        pn_receiver.flow(1) # XXX no future
 
-    # def on_sendable(self, event):
-    #     self.send_messages(event.sender)
+        if pn_receiver.credit == 0:
+            pn_receiver.flow(1)
 
-    # def on_message_enqueued(self, event):
-    #     self.send_messages(event.subject)
-
-    # def send_messages(self, sender):
-    #     gb_sender = self.client._endpoints[sender]
-    #     queue = gb_sender._message_queue
-    #     port = gb_sender._tracker_port
-
-    #     while sender.credit > 0 and not queue.empty():
-    #         message, on_delivery = queue.get()
-
-    #         delivery = sender.send(message)
-    #         tracker = Tracker(self.client, delivery, message)
-
-    #         port.put(tracker)
-
-    #         self.pending_deliveries[delivery] = (tracker, on_delivery)
+        _set_result(future, None)
 
     def on_message(self, event):
-        gb_receiver = self.client._endpoints[event.receiver]
-        gb_receiver._delivery_queue.put((event.delivery, event.message))
+        receiver = event.receiver._gb_object
+        delivery = Delivery(self.client, event.delivery, event.message)
+
+        with receiver._lock:
+            receiver._deliveries.put_nowait(delivery)
+
+def _set_result(future, result):
+    future.get_loop().call_soon_threadsafe(lambda: future.set_result(result))

@@ -32,91 +32,72 @@ async def testing(conn_url):
         receiver = await conn.open_receiver("abc")
 
         tracker = await sender.send(Message("hi"))
-        #delivery = await receiver.receive()
+        delivery = await receiver.receive()
+
+        print("MESSAGE:", delivery.message)
 
         await sender.close()
         await receiver.close()
         await conn.close()
 
-# def send_once(host, port):
-#     message = Message("hello")
+async def send_once(conn_url):
+    async with Client("sender-1") as client:
+        conn = await client.connect(conn_url)
+        sender = await conn.open_sender("examples")
+        message = Message("hello")
 
-#     with Container("send") as cont:
-#         conn = cont.connect(host, port)
-#         sender = conn.open_sender("examples")
+        await sender.send(message)
 
-#         sender.send(message)
+        print("Sent {}".format(message))
 
-#         print("Sent {}".format(message))
+async def receive_once(conn_url):
+    async with Client("receiver-1") as client:
+        conn = await client.connect(conn_url)
+        receiver = await conn.open_receiver("examples")
 
-# def receive_once(host, port):
-#     with Container("receive") as cont:
-#         conn = cont.connect(host, port)
-#         receiver = conn.open_receiver("examples")
+        delivery = await receiver.receive()
 
-#         delivery = receiver.receive()
+        print("Received {}".format(delivery.message))
 
-#         print("Received {}".format(delivery.message))
+async def send_once_with_tracking(conn_url):
+    async with Client("sender-1") as client:
+        conn = await client.connect(conn_url)
+        sender = await conn.open_sender("examples")
+        message = Message("hello")
 
-# def send_once_synchronously(host, port):
-#     message = Message("hello")
+        tracker = await sender.send(message)
 
-#     with Container("send") as cont:
-#         conn = cont.connect(host, port)
-#         sender = conn.open_sender("examples")
+        print("Sent {} ({})".format(tracker.message, tracker.state))
 
-#         tracker = sender.send(message)
-#         tracker.await_delivery()
+async def receive_once_with_explicit_accept(conn_url):
+    async with Client("receiver-1") as client:
+        conn = await client.connect(conn_url)
+        receiver = await conn.open_receiver("examples", auto_accept=False)
 
-#         print("Sent {} ({})".format(tracker.message, tracker.state))
+        delivery = await receiver.receive()
+        delivery.accept()
 
-# def receive_once_with_explicit_accept(host, port):
-#     with Container("receive") as cont:
-#         conn = cont.connect(host, port)
-#         receiver = conn.open_receiver("examples", auto_accept=False)
+        print("Received {} ({})".format(delivery.message, delivery.state))
 
-#         delivery = receiver.receive()
-#         delivery.accept()
+async def send_batch(conn_url):
+    async with Client("sender-1") as client:
+        conn = await client.connect(conn_url)
+        sender = await conn.open_sender("examples")
 
-#         print("Received {}".format(delivery.message))
+        trackers = await asyncio.gather(*[sender.send(Message(f"hello-{i}")) for i in range(3)])
 
-# def send_batch(host, port):
-#     messages = [Message("hello-{}".format(x)) for x in range(3)]
-#     trackers = list()
+        for tracker in trackers:
+            print("Sent {} ({})".format(tracker.message, tracker.state))
 
-#     with Container("send") as cont:
-#         conn = cont.connect(host, port)
-#         sender = conn.open_sender("examples")
+async def receive_batch(conn_url):
+    async with Client("receiver-1") as client:
+        conn = await client.connect(conn_url)
+        receiver = await conn.open_receiver("examples")
 
-#         for message in messages:
-#             tracker = sender.send(message)
-#             trackers.append(tracker)
+        deliveries = await asyncio.gather(*[receiver.receive() for i in range(3)])
 
-#         for tracker in trackers:
-#             tracker.await_delivery()
-#             print("Sent {} ({})".format(tracker.message, tracker.state))
-
-# def send_batch_with_delivery_callback(host, port):
-#     messages = [Message("hello-{}".format(x)) for x in range(3)]
-
-#     def on_delivery(tracker):
-#         print("Sent {} ({})".format(tracker.message, tracker.state))
-
-#     with Container("send") as cont:
-#         conn = cont.connect(host, port)
-#         sender = conn.open_sender("examples")
-
-#         for message in messages:
-#             sender.send(message, on_delivery=on_delivery)
-
-# def receive_batch(host, port):
-#     with Container("receive") as cont:
-#         conn = cont.connect(host, port)
-#         receiver = conn.open_receiver("examples")
-
-#         for i in range(3):
-#             delivery = receiver.receive()
-#             print("Received {}".format(delivery.message))
+        for delivery in deliveries:
+            print("Received {}".format(delivery.message))
 
 # def send_indefinitely(host, port, stopping):
 #     def on_delivery(tracker):
@@ -219,23 +200,18 @@ async def main():
 
     # Send and receive once
 
-    # send_once(host, port)
-    # receive_once(host, port)
+    await send_once(conn_url)
+    await receive_once(conn_url)
 
-    # # Send and receive once, sending synchronously and using explicit acks
+    # # Send and receive once, sending with tracking and using explicit acks
 
-    # send_once_synchronously(host, port)
-    # receive_once_with_explicit_accept(host, port)
+    await send_once_with_tracking(conn_url)
+    await receive_once_with_explicit_accept(conn_url)
 
     # # Send and receive a batch of three
 
-    # send_batch(host, port)
-    # receive_batch(host, port)
-
-    # # Send and receive a batch of three using the delivery callback
-
-    # send_batch_with_delivery_callback(host, port)
-    # receive_batch(host, port)
+    await send_batch(conn_url)
+    await receive_batch(conn_url)
 
     # # Send and receive indefinitely
 
