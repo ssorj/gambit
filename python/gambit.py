@@ -58,7 +58,7 @@ class Client:
         Close any open connections and stop the container.  Blocks until all connections are closed.
         """
 
-        if self._connections:
+        if self._connections and _asyncio.get_event_loop().is_running():
             done, pending = await _asyncio.wait([x.close() for x in self._connections], timeout=timeout)
 
             if pending:
@@ -139,9 +139,8 @@ class Connection(_Endpoint):
     async def open_sender(self, address, **options):
         """
         Initiate sender open.
-        XXX Use :meth:`Sender.await_open()` to block until the remote peer confirms the open.
 
-        :rtype: XXX Sender
+        :rtype: Sender
         """
 
         assert address is not None
@@ -157,7 +156,7 @@ class Connection(_Endpoint):
         It is called on another thread, not the main API thread.
         Users must take care to use thread-safe code in the callback.
 
-        :rtype: XXX Receiver
+        :rtype: Receiver
         """
 
         assert address is not None
@@ -185,7 +184,7 @@ class Connection(_Endpoint):
         :rtype: Receiver
         """
 
-        raise NotImplementedError()
+        return self.open_receiver(None, timeout=timeout, **options)
 
     @property
     async def default_session(self):
@@ -293,8 +292,7 @@ class Receiver(_Link):
 
         await self.client._fire_event("gb_receive", self._pn_object)
 
-        with self._lock:
-            return await self._deliveries.get()
+        return await self._deliveries.get()
 
     def try_receive(self):
         """
@@ -306,15 +304,11 @@ class Receiver(_Link):
 
         raise NotImplementedError()
 
-    def __iter__(self):
-        return _ReceiverIterator(self)
+    async def __aiter__(self):
+        return self
 
-class _ReceiverIterator(object):
-    def __init__(self, receiver):
-        self._receiver = receiver
-
-    def next(self):
-        return self._receiver.receive()
+    async def __anext__(self):
+        return await self.receive()
 
 class _Terminus(_Object):
     def _get_address(self):
@@ -514,7 +508,7 @@ class _MessagingHandler(_handlers.MessagingHandler):
 
         if event.link.is_receiver:
             future = event.link.__future
-            _set_result(future, Receiver(self.client, event.link, future.get_loop()))
+            _set_result(future, Receiver(self.client, event.link, future._loop))
 
     # Endpoint closing
 
@@ -572,4 +566,4 @@ class _MessagingHandler(_handlers.MessagingHandler):
             receiver._deliveries.put_nowait(delivery)
 
 def _set_result(future, result):
-    future.get_loop().call_soon_threadsafe(lambda: future.set_result(result))
+    future._loop.call_soon_threadsafe(future.set_result, result)
