@@ -31,7 +31,7 @@ async def send_once(conn_url):
         sender = conn.open_sender("examples")
 
         await sender.wait()
-        
+
         message = Message("hello")
         await sender.send(message)
 
