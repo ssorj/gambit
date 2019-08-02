@@ -84,7 +84,7 @@ class Client:
         self._event_injector.trigger(event)
 
     def _call(self, event_name, *args):
-        port = _ReturnPort()
+        port = _ReturnPort(self._lock)
         self._send_event(event_name, port, *args)
         return port.get()
 
@@ -589,15 +589,11 @@ def _set_event(event):
     event._loop.call_soon_threadsafe(event.set)
 
 class _ReturnPort:
-    def __init__(self, lock=None):
-        self.lock = lock
+    def __init__(self, lock):
         self.value = None
 
-        if self.lock is None:
-            self.lock = _threading.Lock()
-
-        self.empty = _threading.Condition(self.lock)
-        self.full = _threading.Condition(self.lock)
+        self.empty = _threading.Condition(lock)
+        self.full = _threading.Condition(lock)
 
     def put(self, value):
         assert value is not None
