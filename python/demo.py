@@ -117,11 +117,7 @@ async def receive_indefinitely(conn_url, stopping):
         conn = client.connect(conn_url)
         receiver = conn.open_receiver("examples")
 
-        print(111, receiver, receiver.__anext__)
-
-        it = await receiver.__anext__()
-
-        async for delivery in it:
+        async for delivery in receiver:
             print(f"Received {delivery.message}")
 
             if stopping.is_set(): break
@@ -166,20 +162,20 @@ async def main():
 
     conn_url = f"amqp://{host}:{port}"
 
-    # # Send and receive once
+    # Send and receive once
 
-    # await send_once(conn_url)
-    # await receive_once(conn_url)
+    await send_once(conn_url)
+    await receive_once(conn_url)
 
-    # # Send and receive once, sending with tracking and using explicit acks
+    # Send and receive once, sending with tracking and using explicit acks
 
-    # await send_once_with_tracking(conn_url)
-    # await receive_once_with_explicit_accept(conn_url)
+    await send_once_with_tracking(conn_url)
+    await receive_once_with_explicit_accept(conn_url)
 
-    # # Send and receive a batch of three
+    # Send and receive a batch of three
 
-    # await send_batch(conn_url)
-    # await receive_batch(conn_url)
+    await send_batch(conn_url)
+    await receive_batch(conn_url)
 
     # Send and receive indefinitely
 
@@ -197,12 +193,12 @@ async def main():
 
     await asyncio.wait(tasks)
 
-    # # Request and respond once
+    # Request and respond once
 
-    # await asyncio.gather(
-    #     request_once(conn_url),
-    #     respond_once(conn_url)
-    # )
+    await asyncio.gather(
+        request_once(conn_url),
+        respond_once(conn_url)
+    )
 
 if __name__ == "__main__":
     try:

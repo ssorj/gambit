@@ -330,7 +330,6 @@ class Receiver(_Link):
             return
 
     async def __aiter__(self):
-        print(222, self)
         return self
 
     async def __anext__(self):
