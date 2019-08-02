@@ -134,7 +134,8 @@ class _Endpoint(_Object):
         self._closed = _asyncio.Event(loop=self.client._loop)
 
     async def wait(self):
-        return await self._opened.wait()
+        await self._opened.wait()
+        return self
 
     async def close(self, error_condition=None):
         """
@@ -184,7 +185,7 @@ class Connection(_Endpoint):
 
         return self.client._call("gb_open_receiver", self._pn_object, address)
 
-    async def open_anonymous_sender(self, **options):
+    def open_anonymous_sender(self, **options):
         """
         Initiate open of an unnamed sender.
         See :meth:`open_sender()`.
@@ -202,7 +203,7 @@ class Connection(_Endpoint):
         :rtype: Receiver
         """
 
-        return self.open_receiver(None, timeout=timeout, **options)
+        return await self.open_receiver(None, timeout=timeout, **options).wait()
 
     @property
     async def default_session(self):
@@ -329,6 +330,7 @@ class Receiver(_Link):
             return
 
     async def __aiter__(self):
+        print(222, self)
         return self
 
     async def __anext__(self):
@@ -588,10 +590,13 @@ def _set_event(event):
     event._loop.call_soon_threadsafe(event.set)
 
 class _ReturnPort:
-    def __init__(self):
+    def __init__(self, lock=None):
+        self.lock = lock
         self.value = None
 
-        self.lock = _threading.Lock()
+        if self.lock is None:
+            self.lock = _threading.Lock()
+
         self.empty = _threading.Condition(self.lock)
         self.full = _threading.Condition(self.lock)
 

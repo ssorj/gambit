@@ -30,8 +30,6 @@ async def send_once(conn_url):
         conn = client.connect(conn_url)
         sender = conn.open_sender("examples")
 
-        await sender.wait()
-
         message = Message("hello")
         await sender.send(message)
 
@@ -48,8 +46,8 @@ async def receive_once(conn_url):
 
 async def send_once_with_tracking(conn_url):
     async with Client("send-once-with-tracking") as client:
-        conn = await client.connect(conn_url)
-        sender = await conn.open_sender("examples")
+        conn = client.connect(conn_url)
+        sender = conn.open_sender("examples")
 
         message = Message("hello")
         tracker = await sender.send(message)
@@ -58,8 +56,8 @@ async def send_once_with_tracking(conn_url):
 
 async def receive_once_with_explicit_accept(conn_url):
     async with Client("receive-once-with-explicit-accept") as client:
-        conn = await client.connect(conn_url)
-        receiver = await conn.open_receiver("examples", auto_accept=False)
+        conn = client.connect(conn_url)
+        receiver = conn.open_receiver("examples", auto_accept=False)
 
         delivery = await receiver.receive()
         delivery.accept()
@@ -68,8 +66,8 @@ async def receive_once_with_explicit_accept(conn_url):
 
 async def send_batch(conn_url):
     async with Client("send-batch") as client:
-        conn = await client.connect(conn_url)
-        sender = await conn.open_sender("examples")
+        conn = client.connect(conn_url)
+        sender = conn.open_sender("examples")
         loop = asyncio.get_event_loop()
         tasks = list()
 
@@ -84,8 +82,8 @@ async def send_batch(conn_url):
 
 async def receive_batch(conn_url):
     async with Client("receive-batch") as client:
-        conn = await client.connect(conn_url)
-        receiver = await conn.open_receiver("examples")
+        conn = client.connect(conn_url)
+        receiver = conn.open_receiver("examples")
         loop = asyncio.get_event_loop()
         tasks = list()
 
@@ -98,8 +96,8 @@ async def receive_batch(conn_url):
 
 async def send_indefinitely(conn_url, stopping):
     async with Client("send-indefinitely") as client:
-        conn = await client.connect(conn_url)
-        sender = await conn.open_sender("examples")
+        conn = client.connect(conn_url)
+        sender = conn.open_sender("examples")
         loop = asyncio.get_event_loop()
         tasks = list()
 
@@ -116,41 +114,46 @@ async def send_indefinitely(conn_url, stopping):
 
 async def receive_indefinitely(conn_url, stopping):
     async with Client("receive-indefinitely") as client:
-        conn = await client.connect(conn_url)
-        receiver = await conn.open_receiver("examples")
+        conn = client.connect(conn_url)
+        receiver = conn.open_receiver("examples")
 
-        async for delivery in receiver:
+        print(111, receiver, receiver.__anext__)
+
+        it = await receiver.__anext__()
+
+        async for delivery in it:
             print(f"Received {delivery.message}")
 
             if stopping.is_set(): break
 
 async def request_once(conn_url):
     async with Client("request-once") as client:
-        conn = await client.connect(conn_url)
-        sender, receiver = await asyncio.gather(conn.open_sender("requests"),
-                                                conn.open_dynamic_receiver())
+        conn = client.connect(conn_url)
+        sender = conn.open_sender("requests")
+        receiver = await conn.open_dynamic_receiver()
 
         request = Message("abc")
         request.reply_to = receiver.source.address
 
-        tracker, delivery = await asyncio.gather(sender.send(request),
-                                                 receiver.receive())
+        tracker, delivery = await asyncio.gather(
+            sender.send(request),
+            receiver.receive()
+        )
 
         print(f"Sent {request} and received {delivery.message}")
 
 async def respond_once(conn_url):
     async with Client("respond-once") as client:
-        conn = await client.connect(conn_url)
-
-        receiver, sender = await asyncio.gather(conn.open_receiver("requests"),
-                                                conn.open_anonymous_sender())
+        conn = client.connect(conn_url)
+        receiver = conn.open_receiver("requests")
+        sender = conn.open_anonymous_sender()
 
         delivery = await receiver.receive()
 
         response = Message(delivery.message.body.upper())
         response.to = delivery.message.reply_to
 
-        asyncio.get_event_loop().create_task(sender.send(response))
+        await sender.send(response)
 
         print(f"Processed {delivery.message} and sent {response}")
 
@@ -163,10 +166,10 @@ async def main():
 
     conn_url = f"amqp://{host}:{port}"
 
-    # Send and receive once
+    # # Send and receive once
 
-    await send_once(conn_url)
-    await receive_once(conn_url)
+    # await send_once(conn_url)
+    # await receive_once(conn_url)
 
     # # Send and receive once, sending with tracking and using explicit acks
 
@@ -178,32 +181,28 @@ async def main():
     # await send_batch(conn_url)
     # await receive_batch(conn_url)
 
-    # # Send and receive indefinitely
+    # Send and receive indefinitely
 
-    # stopping = asyncio.Event()
-    # loop = asyncio.get_event_loop()
+    stopping = asyncio.Event()
+    loop = asyncio.get_event_loop()
 
-    # tasks = [
-    #     loop.create_task(send_indefinitely(conn_url, stopping)),
-    #     loop.create_task(receive_indefinitely(conn_url, stopping)),
-    # ]
+    tasks = [
+        loop.create_task(send_indefinitely(conn_url, stopping)),
+        loop.create_task(receive_indefinitely(conn_url, stopping)),
+    ]
 
-    # await asyncio.sleep(0.1)
+    await asyncio.sleep(0.1)
 
-    # stopping.set()
+    stopping.set()
 
-    # await asyncio.wait(tasks)
+    await asyncio.wait(tasks)
 
     # # Request and respond once
 
-    # loop = asyncio.get_event_loop()
-
-    # tasks = [
-    #     loop.create_task(request_once(conn_url)),
-    #     loop.create_task(respond_once(conn_url)),
-    # ]
-
-    # await asyncio.wait(tasks)
+    # await asyncio.gather(
+    #     request_once(conn_url),
+    #     respond_once(conn_url)
+    # )
 
 if __name__ == "__main__":
     try:
