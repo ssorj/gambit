@@ -56,14 +56,15 @@ class Client:
     async def __aexit__(self, exc_type, exc_value, traceback):
         await self.stop()
 
-    async def stop(self, timeout=None):
+    async def stop(self):
         """
         Close any open connections and stop the container.  Blocks until all connections are closed.
         """
 
         if self._connections and self._loop.is_running():
-            done, pending = await _asyncio.wait([x.close() for x in self._connections], timeout=timeout)
+            done, pending = await _asyncio.wait([x.close() for x in self._connections])
 
+            # XXX
             if pending:
                 raise TimeoutError()
 
@@ -202,7 +203,7 @@ class Connection(_Endpoint):
 
     def open_anonymous_sender(self, **options):
         """
-        Initiate open of an unnamed sender.
+        Initiate open of a sender with no target address.
         See :meth:`open_sender()`.
 
         :rtype: Sender
@@ -249,7 +250,8 @@ class Session(_Endpoint):
 
     def open_anonymous_sender(self, **options):
         """
-        Initiate open of an unnamed sender.
+        Initiate open of a sender with no target address.
+
         See :meth:`open_sender()`.
 
         :rtype: Sender
@@ -257,7 +259,7 @@ class Session(_Endpoint):
 
         return self.open_sender(None, **options)
 
-    async def open_dynamic_receiver(self, timeout=None, **options):
+    async def open_dynamic_receiver(self, **options):
         """
         Open a sender with a dynamic source address supplied by the remote peer.
         See :meth:`open_receiver()`.
@@ -265,7 +267,7 @@ class Session(_Endpoint):
         :rtype: Receiver
         """
 
-        return await self.open_receiver(None, timeout=timeout, **options).wait()
+        return await self.open_receiver(None, **options).wait()
 
 class _Link(_Endpoint):
     def __init__(self, client, pn_object):

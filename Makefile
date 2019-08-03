@@ -30,7 +30,7 @@ demo:
 .PHONY: docs
 docs:
 	mkdir -p build
-	sphinx-build -M html docs build/docs
+	sphinx-build-3 -M html docs build/docs
 
 .PHONY: publish
 publish: docs
