@@ -28,7 +28,6 @@ from gambit import *
 async def send_once(conn_url):
     async with Client("send-once") as client:
         conn = client.connect(conn_url)
-        session = conn.open_session()
         sender = conn.open_sender("examples")
 
         message = Message("hello")

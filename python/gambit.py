@@ -40,8 +40,8 @@ class Client:
         self._worker_thread = _WorkerThread(self)
         self._lock = _threading.Lock()
 
-        self._event_injector = _reactor.EventInjector()
-        self._pn_container.selectable(self._event_injector)
+        self._injector = _reactor.EventInjector()
+        self._pn_container.selectable(self._injector)
 
         self._connections = set()
 
@@ -82,7 +82,7 @@ class Client:
             args = args[0]
 
         event = _reactor.ApplicationEvent(event_name, subject=args)
-        self._event_injector.trigger(event)
+        self._injector.trigger(event)
 
     def _call(self, event_name, *args):
         port = _ReturnPort(self._lock)
@@ -189,7 +189,7 @@ class Connection(_Endpoint):
         :rtype: Sender
         """
 
-        return self.client._call("gb_open_sender", self.default_session._pn_object, address)
+        return self.default_session.open_sender(address, **options)
 
     def open_receiver(self, address, on_message=None, **options):
         """
@@ -202,7 +202,58 @@ class Connection(_Endpoint):
         :rtype: Receiver
         """
 
-        return self.client._call("gb_open_receiver", self.default_session._pn_object, address)
+        return self.default_session.open_receiver(address, **options)
+
+    def open_anonymous_sender(self, **options):
+        """
+        Initiate open of an unnamed sender.
+        See :meth:`open_sender()`.
+
+        :rtype: Sender
+        """
+
+        return self.default_session.open_anonymous_sender(**options)
+
+    async def open_dynamic_receiver(self, **options):
+        """
+        Open a sender with a dynamic source address supplied by the remote peer.
+        See :meth:`open_receiver()`.
+
+        :rtype: Receiver
+        """
+
+        return await self.default_session.open_dynamic_receiver(**options)
+
+class Session(_Endpoint):
+    @property
+    def connection(self):
+        """
+        The connection containing this sender.
+        """
+
+        return self._pn_object.connection._gb_object
+
+    def open_sender(self, address, **options):
+        """
+        Initiate sender open.
+
+        :rtype: Sender
+        """
+
+        return self.client._call("gb_open_sender", self._pn_object, address)
+
+    def open_receiver(self, address, on_message=None, **options):
+        """
+        Initiate receiver open.
+
+        If set, `on_message(delivery)` is called when a message is received.
+        It is called on another thread, not the main API thread.
+        Users must take care to use thread-safe code in the callback.
+
+        :rtype: Receiver
+        """
+
+        return self.client._call("gb_open_receiver", self._pn_object, address)
 
     def open_anonymous_sender(self, **options):
         """
@@ -224,25 +275,28 @@ class Connection(_Endpoint):
 
         return await self.open_receiver(None, timeout=timeout, **options).wait()
 
-class Session(_Endpoint):
-    def __init__(self, client, pn_object):
-        super().__init__(client, pn_object)
-
 class _Link(_Endpoint):
     def __init__(self, client, pn_object):
         super().__init__(client, pn_object)
 
-        self._connection = self._pn_object.connection._gb_object
         self._target = Target(self.client, self._pn_object.remote_target)
         self._source = Source(self.client, self._pn_object.remote_source)
 
     @property
     def connection(self):
         """
-        The connection containing this sender.
+        The connection containing this link.
         """
 
-        return self._connection
+        return self._pn_object.connection._gb_object
+
+    @property
+    def session(self):
+        """
+        The session containing this link.
+        """
+
+        return self._pn_object.session._gb_object
 
     @property
     def source(self):
