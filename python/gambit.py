@@ -191,13 +191,9 @@ class Connection(_Endpoint):
 
         return self.default_session.open_sender(address, **options)
 
-    def open_receiver(self, address, on_message=None, **options):
+    def open_receiver(self, address, **options):
         """
         Initiate receiver open.
-
-        If set, `on_message(delivery)` is called when a message is received.
-        It is called on another thread, not the main API thread.
-        Users must take care to use thread-safe code in the callback.
 
         :rtype: Receiver
         """
@@ -240,20 +236,16 @@ class Session(_Endpoint):
         :rtype: Sender
         """
 
-        return self.client._call("gb_open_sender", self._pn_object, address)
+        return self.client._call("gb_open_sender", self._pn_object, address, options)
 
-    def open_receiver(self, address, on_message=None, **options):
+    def open_receiver(self, address, **options):
         """
         Initiate receiver open.
-
-        If set, `on_message(delivery)` is called when a message is received.
-        It is called on another thread, not the main API thread.
-        Users must take care to use thread-safe code in the callback.
 
         :rtype: Receiver
         """
 
-        return self.client._call("gb_open_receiver", self._pn_object, address)
+        return self.client._call("gb_open_receiver", self._pn_object, address, options)
 
     def open_anonymous_sender(self, **options):
         """
@@ -320,15 +312,11 @@ class Sender(_Link):
 
         self._sendable = _asyncio.Event(loop=self.client._loop)
 
-    async def send(self, message, timeout=None, on_delivery=None):
+    async def send(self, message):
         """
         Send a message.
 
         Blocks until credit is available and the message can be sent.
-
-        If set, `on_delivery(tracker)` is called after the delivery is acknowledged.
-        It is called on another thread, not the main API thread.
-        Users must take care to use thread-safe code in the callback.
 
         :rtype: Tracker
         """
@@ -338,19 +326,13 @@ class Sender(_Link):
 
         return await self.client._call_async("gb_send", self._pn_object, message)
 
-    async def try_send(self, message, on_delivery=None):
+    async def try_send(self, message):
         """
         Send a message without blocking for credit.
 
         If there is credit, the message is sent and a tracker is
-        returned.
-
-        If no credit is available, the method immediately returns
-        `None`.
-
-        If set, `on_delivery(tracker)` is called after the delivery is acknowledged.
-        It is called on another thread, not the main API thread.
-        Users must take care to use thread-safe code in the callback.
+        returned.  If no credit is available, the method immediately
+        returns `None`.
 
         :rtype: Tracker
         """
@@ -371,7 +353,7 @@ class Receiver(_Link):
 
         self._deliveries = _asyncio.Queue(loop=self.client._loop)
 
-    async def receive(self, timeout=None):
+    async def receive(self):
         """
         Receive a delivery containing a message.  Blocks until a message is available.
 
@@ -596,7 +578,7 @@ class _MessagingHandler(_handlers.MessagingHandler):
     # Link opening
 
     def on_gb_open_sender(self, event):
-        port, pn_session, address = event.subject
+        port, pn_session, address, options = event.subject
 
         pn_sender = pn_session.sender(str(_uuid.uuid4()))
         pn_sender.target.address = address
@@ -605,7 +587,7 @@ class _MessagingHandler(_handlers.MessagingHandler):
         port.put(Sender(self.client, pn_sender))
 
     def on_gb_open_receiver(self, event):
-        port, pn_session, address = event.subject
+        port, pn_session, address, options = event.subject
 
         pn_receiver = pn_session.receiver(str(_uuid.uuid4()))
         pn_receiver.source.address = address
