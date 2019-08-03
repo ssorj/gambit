@@ -101,7 +101,7 @@ async def send_indefinitely(conn_url, stopping):
         loop = asyncio.get_event_loop()
         tasks = list()
 
-        for i in range(655536):
+        for i in range(65536):
             message = Message(f"message-{i}")
             task = loop.create_task(sender.send(message))
             tasks.append(task)
@@ -142,14 +142,13 @@ async def respond_once(conn_url):
     async with Client("respond-once") as client:
         conn = client.connect(conn_url)
         receiver = conn.open_receiver("requests")
-        sender = conn.open_anonymous_sender()
 
         delivery = await receiver.receive()
 
         response = Message(delivery.message.body.upper())
         response.to = delivery.message.reply_to
 
-        await sender.send(response)
+        await conn.send(response)
 
         print(f"Processed {delivery.message} and sent {response}")
 

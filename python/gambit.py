@@ -161,6 +161,7 @@ class Connection(_Endpoint):
         super().__init__(client, pn_object)
 
         self._default_session = None
+        self._default_sender = None
 
         self.client._connections.add(self)
 
@@ -214,6 +215,7 @@ class Connection(_Endpoint):
     async def open_dynamic_receiver(self, **options):
         """
         Open a sender with a dynamic source address supplied by the remote peer.
+
         See :meth:`open_receiver()`.
 
         :rtype: Receiver
@@ -221,7 +223,21 @@ class Connection(_Endpoint):
 
         return await self.default_session.open_dynamic_receiver(**options)
 
+    async def send(self, message):
+        """
+        Send a message using the default session and default sender.
+        The message 'to' field must be set.
+
+        :rtype: Tracker
+        """
+        return await self.default_session.send(message)
+
 class Session(_Endpoint):
+    def __init__(self, client, pn_object):
+        super().__init__(client, pn_object)
+
+        self._default_sender = None
+
     @property
     def connection(self):
         """
@@ -229,6 +245,18 @@ class Session(_Endpoint):
         """
 
         return self._pn_object.connection._gb_object
+
+    @property
+    def default_sender(self):
+        """
+        The default sender.  The default is an anonymous sender with
+        no options set.
+        """
+
+        if self._default_sender is None:
+            self._default_sender = self.open_anonymous_sender()
+
+        return self._default_sender
 
     def open_sender(self, address, **options):
         """
@@ -268,6 +296,19 @@ class Session(_Endpoint):
         """
 
         return await self.open_receiver(None, **options).wait()
+
+    async def send(self, message):
+        """
+        Send a message using the default sender.
+        The message 'to' field must be set.
+
+        :rtype: Tracker
+        """
+
+        if message.to is None:
+            raise Error("Message 'to' address not set")
+
+        return await self.default_sender.send(message)
 
 class _Link(_Endpoint):
     def __init__(self, client, pn_object):
