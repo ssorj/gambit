@@ -20,6 +20,7 @@
 import asyncio as _asyncio
 import sys as _sys
 import threading as _threading
+import uuid as _uuid
 
 import proton as _proton
 import proton.handlers as _handlers
@@ -134,15 +135,20 @@ class _Endpoint(_Object):
         self._closed = _asyncio.Event(loop=self.client._loop)
 
     async def wait(self):
+        """
+        Wait for the remote peer to confirm the open operation.
+
+        :rtype: Endpoint
+        """
         await self._opened.wait()
         return self
 
     async def close(self, error_condition=None):
         """
-        Initiate close.
+        Close the endpoint.
         """
 
-        if self._pn_object.state & self._pn_object.LOCAL_CLOSED:
+        if self._closed.is_set():
             return
 
         self.client._send_event("gb_close_endpoint", self._pn_object)
@@ -152,6 +158,8 @@ class _Endpoint(_Object):
 class Connection(_Endpoint):
     def __init__(self, client, pn_object):
         super().__init__(client, pn_object)
+
+        self._default_session = None
 
         self.client._connections.add(self)
 
@@ -163,6 +171,17 @@ class Connection(_Endpoint):
         """
         return self.client._call("gb_open_session", self._pn_object)
 
+    @property
+    def default_session(self):
+        """
+        The default session.
+        """
+
+        if self._default_session is None:
+            self._default_session = self.open_session()
+
+        return self._default_session
+
     def open_sender(self, address, **options):
         """
         Initiate sender open.
@@ -170,7 +189,7 @@ class Connection(_Endpoint):
         :rtype: Sender
         """
 
-        return self.client._call("gb_open_sender", self._pn_object, address)
+        return self.client._call("gb_open_sender", self.default_session._pn_object, address)
 
     def open_receiver(self, address, on_message=None, **options):
         """
@@ -183,7 +202,7 @@ class Connection(_Endpoint):
         :rtype: Receiver
         """
 
-        return self.client._call("gb_open_receiver", self._pn_object, address)
+        return self.client._call("gb_open_receiver", self.default_session._pn_object, address)
 
     def open_anonymous_sender(self, **options):
         """
@@ -205,16 +224,9 @@ class Connection(_Endpoint):
 
         return await self.open_receiver(None, timeout=timeout, **options).wait()
 
-    @property
-    async def default_session(self):
-        """
-        The default session.
-        """
-
-        raise NotImplementedError()
-
 class Session(_Endpoint):
-    pass
+    def __init__(self, client, pn_object):
+        super().__init__(client, pn_object)
 
 class _Link(_Endpoint):
     def __init__(self, client, pn_object):
@@ -300,10 +312,10 @@ class Receiver(_Link):
     Each item returned during iteration is a delivery obtained by calling `receive()`.
     """
 
-    def __init__(self, client, pn_object, event_loop):
+    def __init__(self, client, pn_object):
         super().__init__(client, pn_object)
 
-        self._deliveries = _asyncio.Queue(loop=event_loop)
+        self._deliveries = _asyncio.Queue(loop=self.client._loop)
 
     async def receive(self, timeout=None):
         """
@@ -514,18 +526,39 @@ class _MessagingHandler(_handlers.MessagingHandler):
     def on_connection_opened(self, event):
         _set_event(event.connection._gb_object._opened)
 
+    # Session opening
+
+    def on_gb_open_session(self, event):
+        port, pn_conn = event.subject
+
+        pn_session = pn_conn.session()
+        pn_session.open()
+
+        port.put(Session(self.client, pn_session))
+
+    def on_session_opened(self, event):
+        _set_event(event.session._gb_object._opened)
+
     # Link opening
 
     def on_gb_open_sender(self, event):
-        port, pn_conn, address = event.subject
-        pn_sender = self.client._pn_container.create_sender(pn_conn, address)
+        port, pn_session, address = event.subject
+
+        pn_sender = pn_session.sender(str(_uuid.uuid4()))
+        pn_sender.target.address = address
+        pn_sender.open()
+
         port.put(Sender(self.client, pn_sender))
 
     def on_gb_open_receiver(self, event):
-        port, pn_conn, address = event.subject
-        dynamic = address is None
-        pn_receiver = self.client._pn_container.create_receiver(pn_conn, address, dynamic=dynamic)
-        port.put(Receiver(self.client, pn_receiver, self.client._loop))
+        port, pn_session, address = event.subject
+
+        pn_receiver = pn_session.receiver(str(_uuid.uuid4()))
+        pn_receiver.source.address = address
+        pn_receiver.source.dynamic = address is None
+        pn_receiver.open()
+
+        port.put(Receiver(self.client, pn_receiver))
 
     def on_link_opened(self, event):
         _set_event(event.link._gb_object._opened)

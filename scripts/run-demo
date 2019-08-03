@@ -25,7 +25,7 @@ from plano import *
 class TestBroker(object):
     def __init__(self):
         self.host = "127.0.0.1"
-        self.port = random_port()
+        self.port = get_random_port()
         self.output_file = make_temp_file()
 
         self.output = None
