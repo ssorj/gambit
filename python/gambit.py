@@ -291,7 +291,9 @@ class Session(_Endpoint):
         Open a sender with a dynamic source address supplied by the remote peer.
         See :meth:`open_receiver()`.
 
-        :rtype: Future<Receiver>
+        XXX Blocking
+
+        :rtype: Receiver
         """
 
         return self.open_receiver(None, **options).wait()
