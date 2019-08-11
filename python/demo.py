@@ -50,7 +50,7 @@ def send_once_with_tracking(conn_url):
         sender = conn.open_sender("examples")
 
         message = Message("hello")
-        tracker = sender.send(message).result()
+        tracker = sender.send(message).wait()
 
         print(f"Sent {tracker.message} ({tracker.state})")
 

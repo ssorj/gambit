@@ -87,7 +87,7 @@ class Client:
     def _call(self, event_name, *args):
         future = _Future(self._lock)
         self._send_event(event_name, future, *args)
-        return future.result()
+        return future.wait()
 
     def _call_async(self, event_name, *args):
         future = _Future(self._lock)
