@@ -59,8 +59,13 @@ class Client:
         Close any open connections and stop the container.  Blocks until all connections are closed.
         """
 
+        waitables = list()
+
         for conn in self._connections:
-            conn.close()
+            waitables.append(conn.close())
+
+        for waitable in waitables:
+            waitable.wait()
 
         with self._lock:
             self._worker_thread.stop()
@@ -148,7 +153,7 @@ class _Endpoint(_Object):
 
         self.client._send_event("gb_close_endpoint", self._pn_object)
 
-        return self._closed.wait() # XXX
+        return self._closed
 
 class Connection(_Endpoint):
     def __init__(self, client, pn_object):
@@ -716,3 +721,6 @@ class _Future:
             self.empty.notify()
 
             return value
+
+    def wait(self):
+        return self.result()

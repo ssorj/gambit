@@ -31,7 +31,7 @@ def send_once(conn_url):
         sender = conn.open_sender("examples")
 
         message = Message("hello")
-        sender.send(message).result()
+        sender.send(message).wait()
 
         print(f"Sent {message}")
 
@@ -81,7 +81,7 @@ def send_batch(conn_url):
             futures.append(future)
 
         for future in futures:
-            future.result()
+            future.wait()
 
         print("Sent 3 messages")
 
@@ -141,8 +141,7 @@ def respond_once(conn_url):
         response = Message(delivery.message.body.upper())
         response.to = delivery.message.reply_to
 
-        future = conn.send(response)
-        future.result() # Wait for it
+        conn.send(response).wait()
 
         print(f"Processed {delivery.message} and sent {response}")
 
