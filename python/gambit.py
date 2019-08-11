@@ -17,7 +17,7 @@
 # under the License.
 #
 
-import asyncio as _asyncio
+import queue as _queue
 import sys as _sys
 import threading as _threading
 import uuid as _uuid
@@ -35,8 +35,6 @@ class Client:
         if id is not None:
             self._pn_container.container_id = id
 
-        self._loop = _asyncio.get_event_loop()
-
         self._worker_thread = _WorkerThread(self)
         self._lock = _threading.Lock()
 
@@ -45,7 +43,7 @@ class Client:
 
         self._connections = set()
 
-    async def __aenter__(self):
+    def __enter__(self):
         _threading.current_thread().name = "user"
 
         with self._lock:
@@ -53,20 +51,16 @@ class Client:
 
         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        await self.stop()
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.stop()
 
-    async def stop(self):
+    def stop(self):
         """
         Close any open connections and stop the container.  Blocks until all connections are closed.
         """
 
-        if self._connections and self._loop.is_running():
-            done, pending = await _asyncio.wait([x.close() for x in self._connections])
-
-            # XXX
-            if pending:
-                raise TimeoutError()
+        for conn in self._connections:
+            conn.close()
 
         with self._lock:
             self._worker_thread.stop()
@@ -86,12 +80,12 @@ class Client:
         self._injector.trigger(event)
 
     def _call(self, event_name, *args):
-        port = _ReturnPort(self._lock)
-        self._send_event(event_name, port, *args)
-        return port.get()
+        future = _Future(self._lock)
+        self._send_event(event_name, future, *args)
+        return future.result()
 
     def _call_async(self, event_name, *args):
-        future = self._loop.create_future()
+        future = _Future(self._lock)
         self._send_event(event_name, future, *args)
         return future
 
@@ -132,19 +126,19 @@ class _Endpoint(_Object):
     def __init__(self, client, pn_object):
         super().__init__(client, pn_object)
 
-        self._opened = _asyncio.Event(loop=self.client._loop)
-        self._closed = _asyncio.Event(loop=self.client._loop)
+        self._opened = _threading.Event()
+        self._closed = _threading.Event()
 
-    async def wait(self):
+    def wait(self):
         """
         Wait for the remote peer to confirm the open operation.
 
         :rtype: Endpoint
         """
-        await self._opened.wait()
+        self._opened.wait()
         return self
 
-    async def close(self, error_condition=None):
+    def close(self, error_condition=None):
         """
         Close the endpoint.
         """
@@ -154,7 +148,7 @@ class _Endpoint(_Object):
 
         self.client._send_event("gb_close_endpoint", self._pn_object)
 
-        return await self._closed.wait()
+        return self._closed.wait() # XXX
 
 class Connection(_Endpoint):
     def __init__(self, client, pn_object):
@@ -212,25 +206,25 @@ class Connection(_Endpoint):
 
         return self.default_session.open_anonymous_sender(**options)
 
-    async def open_dynamic_receiver(self, **options):
+    def open_dynamic_receiver(self, **options):
         """
         Open a sender with a dynamic source address supplied by the remote peer.
 
         See :meth:`open_receiver()`.
 
-        :rtype: Receiver
+        :rtype: Future<Receiver>
         """
 
-        return await self.default_session.open_dynamic_receiver(**options)
+        return self.default_session.open_dynamic_receiver(**options)
 
-    async def send(self, message):
+    def send(self, message):
         """
         Send a message using the default session and default sender.
         The message 'to' field must be set.
 
-        :rtype: Tracker
+        :rtype: Future<Tracker>
         """
-        return await self.default_session.send(message)
+        return self.default_session.send(message)
 
 class Session(_Endpoint):
     def __init__(self, client, pn_object):
@@ -287,28 +281,28 @@ class Session(_Endpoint):
 
         return self.open_sender(None, **options)
 
-    async def open_dynamic_receiver(self, **options):
+    def open_dynamic_receiver(self, **options):
         """
         Open a sender with a dynamic source address supplied by the remote peer.
         See :meth:`open_receiver()`.
 
-        :rtype: Receiver
+        :rtype: Future<Receiver>
         """
 
-        return await self.open_receiver(None, **options).wait()
+        return self.open_receiver(None, **options).wait()
 
-    async def send(self, message):
+    def send(self, message):
         """
         Send a message using the default sender.
         The message 'to' field must be set.
 
-        :rtype: Tracker
+        :rtype: Future<Tracker>
         """
 
         if message.to is None:
             raise Error("Message 'to' address not set")
 
-        return await self.default_sender.send(message)
+        return self.default_sender.send(message)
 
 class _Link(_Endpoint):
     def __init__(self, client, pn_object):
@@ -353,9 +347,9 @@ class Sender(_Link):
     def __init__(self, client, pn_object):
         super().__init__(client, pn_object)
 
-        self._sendable = _asyncio.Event(loop=self.client._loop)
+        self._sendable = _threading.Event()
 
-    async def send(self, message):
+    def send(self, message):
         """
         Send a message.
 
@@ -364,12 +358,12 @@ class Sender(_Link):
         :rtype: Tracker
         """
 
-        await self._sendable.wait()
+        self._sendable.wait()
         self._sendable.clear()
 
-        return await self.client._call_async("gb_send", self._pn_object, message)
+        return self.client._call_async("gb_send", self._pn_object, message)
 
-    async def try_send(self, message):
+    def try_send(self, message):
         """
         Send a message without blocking for credit.
 
@@ -383,7 +377,7 @@ class Sender(_Link):
         if not self._sendable.is_set():
             return
 
-        return await self.client._call_async("gb_send", self._pn_object, message)
+        return self.client._call_async("gb_send", self._pn_object, message)
 
 class Receiver(_Link):
     """
@@ -394,9 +388,9 @@ class Receiver(_Link):
     def __init__(self, client, pn_object):
         super().__init__(client, pn_object)
 
-        self._deliveries = _asyncio.Queue(loop=self.client._loop)
+        self._deliveries = _queue.Queue()
 
-    async def receive(self):
+    def receive(self):
         """
         Receive a delivery containing a message.  Blocks until a message is available.
 
@@ -405,9 +399,9 @@ class Receiver(_Link):
 
         self.client._send_event("gb_receive", self._pn_object)
 
-        return await self._deliveries.get()
+        return self._deliveries.get()
 
-    async def try_receive(self):
+    def try_receive(self):
         """
         Receive a delivery containing a message if one is already
         available.  Otherwise, return `None`.
@@ -417,14 +411,14 @@ class Receiver(_Link):
 
         try:
             return self._deliveries.get_nowait()
-        except _asyncio.QueueEmpty:
+        except _queue.QueueEmpty:
             return
 
-    async def __aiter__(self):
+    def __iter__(self):
         return self
 
-    async def __anext__(self):
-        return await self.receive()
+    def __next__(self):
+        return self.receive()
 
 class _Terminus(_Object):
     def _get_address(self):
@@ -598,49 +592,49 @@ class _MessagingHandler(_handlers.MessagingHandler):
     # Connection opening
 
     def on_gb_connect(self, event):
-        port, conn_url = event.subject
+        future, conn_url = event.subject
         pn_conn = self.client._pn_container.connect(conn_url, allowed_mechs="ANONYMOUS")
-        port.put(Connection(self.client, pn_conn))
+        future.set_result(Connection(self.client, pn_conn))
 
     def on_connection_opened(self, event):
-        _set_event(event.connection._gb_object._opened)
+        event.connection._gb_object._opened.set()
 
     # Session opening
 
     def on_gb_open_session(self, event):
-        port, pn_conn = event.subject
+        future, pn_conn = event.subject
 
         pn_session = pn_conn.session()
         pn_session.open()
 
-        port.put(Session(self.client, pn_session))
+        future.set_result(Session(self.client, pn_session))
 
     def on_session_opened(self, event):
-        _set_event(event.session._gb_object._opened)
+        event.session._gb_object._opened.set()
 
     # Link opening
 
     def on_gb_open_sender(self, event):
-        port, pn_session, address, options = event.subject
+        future, pn_session, address, options = event.subject
 
         pn_sender = pn_session.sender(str(_uuid.uuid4()))
         pn_sender.target.address = address
         pn_sender.open()
 
-        port.put(Sender(self.client, pn_sender))
+        future.set_result(Sender(self.client, pn_sender))
 
     def on_gb_open_receiver(self, event):
-        port, pn_session, address, options = event.subject
+        future, pn_session, address, options = event.subject
 
         pn_receiver = pn_session.receiver(str(_uuid.uuid4()))
         pn_receiver.source.address = address
         pn_receiver.source.dynamic = address is None
         pn_receiver.open()
 
-        port.put(Receiver(self.client, pn_receiver))
+        future.set_result(Receiver(self.client, pn_receiver))
 
     def on_link_opened(self, event):
-        _set_event(event.link._gb_object._opened)
+        event.link._gb_object._opened.set()
 
     # Endpoint closing
 
@@ -649,18 +643,18 @@ class _MessagingHandler(_handlers.MessagingHandler):
         pn_endpoint.close()
 
     def on_connection_closed(self, event):
-        _set_event(event.connection._gb_object._closed)
+        event.connection._gb_object._closed.set()
 
     def on_session_closed(self, event):
-        _set_event(event.session._gb_object._closed)
+        event.session._gb_object._closed.set()
 
     def on_link_closed(self, event):
-        _set_event(event.link._gb_object._closed)
+        event.link._gb_object._closed.set()
 
     # Sending
 
     def on_sendable(self, event):
-        _set_event(event.link._gb_object._sendable)
+        event.link._gb_object._sendable.set()
 
     def on_gb_send(self, event):
         future, pn_sender, message = event.subject
@@ -669,7 +663,7 @@ class _MessagingHandler(_handlers.MessagingHandler):
         pn_delivery.__message = message
 
     def on_acknowledged(self, event):
-        _set_result(event.delivery.__future, Tracker(self.client, event.delivery, event.delivery.__message))
+        event.delivery.__future.set_result(Tracker(self.client, event.delivery, event.delivery.__message))
 
     def on_accepted(self, event):
         self.on_acknowledged(event)
@@ -692,22 +686,16 @@ class _MessagingHandler(_handlers.MessagingHandler):
         receiver = event.receiver._gb_object
         delivery = Delivery(self.client, event.delivery, event.message)
 
-        self.client._loop.call_soon_threadsafe(receiver._deliveries.put_nowait, delivery)
+        receiver._deliveries.put(delivery)
 
-def _set_result(future, result):
-    future._loop.call_soon_threadsafe(future.set_result, result)
-
-def _set_event(event):
-    event._loop.call_soon_threadsafe(event.set)
-
-class _ReturnPort:
+class _Future:
     def __init__(self, lock):
         self.value = None
 
         self.empty = _threading.Condition(lock)
         self.full = _threading.Condition(lock)
 
-    def put(self, value):
+    def set_result(self, value):
         assert value is not None
 
         with self.empty:
@@ -717,7 +705,7 @@ class _ReturnPort:
             self.value = value
             self.full.notify()
 
-    def get(self):
+    def result(self):
         with self.full:
             while self.value is None:
                 self.full.wait()

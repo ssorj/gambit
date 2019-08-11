@@ -17,7 +17,7 @@
 # under the License.
 #
 
-import asyncio
+import os
 import queue
 import sys
 import threading
@@ -25,134 +25,128 @@ import time
 
 from gambit import *
 
-async def send_once(conn_url):
-    async with Client("send-once") as client:
+def send_once(conn_url):
+    with Client("send-once") as client:
         conn = client.connect(conn_url)
         sender = conn.open_sender("examples")
 
         message = Message("hello")
-        await sender.send(message)
+        sender.send(message).result()
 
         print(f"Sent {message}")
 
-async def receive_once(conn_url):
-    async with Client("receive-once") as client:
+def receive_once(conn_url):
+    with Client("receive-once") as client:
         conn = client.connect(conn_url)
         receiver = conn.open_receiver("examples")
 
-        delivery = await receiver.receive()
+        delivery = receiver.receive()
 
         print(f"Received {delivery.message}")
 
-async def send_once_with_tracking(conn_url):
-    async with Client("send-once-with-tracking") as client:
+def send_once_with_tracking(conn_url):
+    with Client("send-once-with-tracking") as client:
         conn = client.connect(conn_url)
         sender = conn.open_sender("examples")
 
         message = Message("hello")
-        tracker = await sender.send(message)
+        tracker = sender.send(message).result()
 
         print(f"Sent {tracker.message} ({tracker.state})")
 
-async def receive_once_with_explicit_accept(conn_url):
-    async with Client("receive-once-with-explicit-accept") as client:
+def receive_once_with_explicit_accept(conn_url):
+    with Client("receive-once-with-explicit-accept") as client:
         conn = client.connect(conn_url)
         receiver = conn.open_receiver("examples", auto_accept=False)
 
-        delivery = await receiver.receive()
+        try:
+            delivery = receiver.receive()
+        except Exception as e:
+            print(e)
+            raise e
+
         delivery.accept()
 
         print(f"Received {delivery.message} ({delivery.state})")
 
-async def send_batch(conn_url):
-    async with Client("send-batch") as client:
+def send_batch(conn_url):
+    with Client("send-batch") as client:
         conn = client.connect(conn_url)
         sender = conn.open_sender("examples")
-        loop = asyncio.get_event_loop()
-        tasks = list()
+        futures = list()
 
         for i in range(3):
             message = Message(f"hello-{i}")
-            task = loop.create_task(sender.send(message))
-            tasks.append(task)
+            future = sender.send(message)
+            futures.append(future)
 
-        await asyncio.wait(tasks)
+        for future in futures:
+            future.result()
 
         print("Sent 3 messages")
 
-async def receive_batch(conn_url):
-    async with Client("receive-batch") as client:
+# XXX Not really batched
+def receive_batch(conn_url):
+    with Client("receive-batch") as client:
         conn = client.connect(conn_url)
         receiver = conn.open_receiver("examples")
-        loop = asyncio.get_event_loop()
-        tasks = list()
 
         for i in range(3):
-            task = loop.create_task(receiver.receive())
-            tasks.append(task)
-
-        for delivery in await asyncio.gather(*tasks):
+            delivery = receiver.receive()
             print(f"Received {delivery.message}")
 
-async def send_indefinitely(conn_url, stopping):
-    async with Client("send-indefinitely") as client:
+def send_indefinitely(conn_url, stopping):
+    with Client("send-indefinitely") as client:
         conn = client.connect(conn_url)
         sender = conn.open_sender("examples")
-        loop = asyncio.get_event_loop()
         tasks = list()
 
         for i in range(65536):
             message = Message(f"message-{i}")
-            task = loop.create_task(sender.send(message))
-            tasks.append(task)
-
-            if i % 10 == 0:
-                await asyncio.wait(tasks)
-                tasks = list()
+            sender.send(message)
 
             if stopping.is_set(): break
 
-async def receive_indefinitely(conn_url, stopping):
-    async with Client("receive-indefinitely") as client:
+def receive_indefinitely(conn_url, stopping):
+    with Client("receive-indefinitely") as client:
         conn = client.connect(conn_url)
         receiver = conn.open_receiver("examples")
 
-        async for delivery in receiver:
+        for delivery in receiver:
             print(f"Received {delivery.message}")
 
             if stopping.is_set(): break
 
-async def request_once(conn_url):
-    async with Client("request-once") as client:
+def request_once(conn_url):
+    with Client("request-once") as client:
         conn = client.connect(conn_url)
         sender = conn.open_sender("requests")
-        receiver = await conn.open_dynamic_receiver()
+        receiver = conn.open_dynamic_receiver()
 
         request = Message("abc")
         request.reply_to = receiver.source.address
 
-        tracker, delivery = await asyncio.gather(
-            sender.send(request),
-            receiver.receive()
-        )
+        sender.send(request)
+        delivery = receiver.receive()
 
         print(f"Sent {request} and received {delivery.message}")
 
-async def respond_once(conn_url):
-    async with Client("respond-once") as client:
+def respond_once(conn_url):
+    with Client("respond-once") as client:
         conn = client.connect(conn_url)
         receiver = conn.open_receiver("requests")
 
-        delivery = await receiver.receive()
+        delivery = receiver.receive()
 
         response = Message(delivery.message.body.upper())
         response.to = delivery.message.reply_to
 
-        await conn.send(response)
+        future = conn.send(response)
+        future.result() # Wait for it
 
         print(f"Processed {delivery.message} and sent {response}")
 
-async def main():
+def main():
     try:
         host, port = sys.argv[1:3]
         port = int(port)
@@ -163,46 +157,47 @@ async def main():
 
     # Send and receive once
 
-    await send_once(conn_url)
-    await receive_once(conn_url)
+    send_once(conn_url)
+    receive_once(conn_url)
 
     # Send and receive once, sending with tracking and using explicit acks
 
-    await send_once_with_tracking(conn_url)
-    await receive_once_with_explicit_accept(conn_url)
+    send_once_with_tracking(conn_url)
+    receive_once_with_explicit_accept(conn_url)
 
     # Send and receive a batch of three
 
-    await send_batch(conn_url)
-    await receive_batch(conn_url)
+    send_batch(conn_url)
+    receive_batch(conn_url)
 
     # Send and receive indefinitely
 
-    stopping = asyncio.Event()
-    loop = asyncio.get_event_loop()
+    stopping = threading.Event()
 
-    tasks = [
-        loop.create_task(send_indefinitely(conn_url, stopping)),
-        loop.create_task(receive_indefinitely(conn_url, stopping)),
-    ]
+    send_thread = threading.Thread(target=send_indefinitely, args=(conn_url, stopping))
+    receive_thread = threading.Thread(target=receive_indefinitely, args=(conn_url, stopping))
 
-    await asyncio.sleep(0.1)
+    send_thread.start()
+    receive_thread.start()
+
+    time.sleep(0.1)
 
     stopping.set()
 
-    await asyncio.wait(tasks)
+    send_thread.join()
+    receive_thread.join()
 
     # Request and respond once
 
-    await asyncio.gather(
-        request_once(conn_url),
-        respond_once(conn_url)
-    )
+    respond_thread = threading.Thread(target=respond_once, args=(conn_url,))
+    respond_thread.start()
+
+    request_once(conn_url)
+
+    respond_thread.join()
 
 if __name__ == "__main__":
     try:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(main())
-        loop.close()
+        main()
     except KeyboardInterrupt:
         pass
