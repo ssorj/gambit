@@ -59,12 +59,7 @@ def receive_once_with_explicit_accept(conn_url):
         conn = client.connect(conn_url)
         receiver = conn.open_receiver("examples", auto_accept=False)
 
-        try:
-            delivery = receiver.receive()
-        except Exception as e:
-            print(e)
-            raise e
-
+        delivery = receiver.receive()
         delivery.accept()
 
         print(f"Received {delivery.message} ({delivery.state})")
